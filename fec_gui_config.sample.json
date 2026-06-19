@@ -1,0 +1,9 @@
+{
+  "cf": "RSSMRA80A01H501U",
+  "pin": "",
+  "cfstudio": "12345678901",
+  "login_backend": "browser",
+  "browser_headless": false,
+  "std_profilo": "1 – Studio → cliente (delegato singolo soggetto)",
+  "std_destdir": ""
+}

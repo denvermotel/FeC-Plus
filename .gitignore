@@ -1,0 +1,44 @@
+# ─── Credenziali / configurazione locale ──────────────────────────────────────
+# Generato dalla GUI: contiene CF, PIN, CF studio e percorsi locali. NON committare.
+fec_gui_config.json
+
+# ─── Dati personali: output dei download ──────────────────────────────────────
+Download/
+inviomassivo/
+inviocorrispettivi/
+FattureEmesse_*/
+FattureRicevute_*/
+FattureEmesseTRAN_*/
+FattureRicevuteTRAN_*/
+FattureRicevuteDisposizione_*/
+F24_Bolli_*/
+*_inviati.csv
+
+# ─── Materiale di riferimento reale dal portale AdE (HTML con dati personali) ──
+_materiale/
+
+# ─── Codice legacy archiviato (non fa parte dell'app) ─────────────────────────
+_archive/
+
+# ─── Note interne di progetto (contengono dati personali) ─────────────────────
+MEMORY.md
+
+# ─── Configurazione locale di Claude Code (non fa parte del progetto) ──────────
+.claude/
+
+# ─── Dump diagnostici del login ───────────────────────────────────────────────
+_debug_login.html
+_debug_wizard_step*.html
+
+# ─── Ambiente Python ──────────────────────────────────────────────────────────
+.venv/
+__pycache__/
+*.pyc
+
+# ─── Database / varie ─────────────────────────────────────────────────────────
+*.db
+
+# ─── Sistema operativo ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini

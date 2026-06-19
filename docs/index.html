@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FeC-Plus — Fatture e Corrispettivi AdE</title>
+  <meta name="description" content="FeC-Plus: strumento con interfaccia grafica per scaricare fatture elettroniche e corrispettivi dal portale Fatture e Corrispettivi dell'Agenzia delle Entrate." />
+  <style>
+    :root {
+      --bg: #0f172a;
+      --bg2: #1e293b;
+      --card: #ffffff;
+      --ink: #1e293b;
+      --muted: #64748b;
+      --brand: #2563eb;
+      --brand-dark: #1d4ed8;
+      --border: #e2e8f0;
+      --ok: #16a34a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: var(--ink);
+      background: #f8fafc;
+      line-height: 1.6;
+    }
+    a { color: var(--brand); }
+
+    /* Hero */
+    .hero {
+      background: linear-gradient(160deg, var(--bg) 0%, var(--bg2) 100%);
+      color: #f1f5f9;
+      padding: 72px 20px 64px;
+      text-align: center;
+    }
+    .badge {
+      display: inline-block;
+      background: rgba(37, 99, 235, .2);
+      color: #93c5fd;
+      border: 1px solid rgba(147, 197, 253, .4);
+      border-radius: 999px;
+      padding: 4px 14px;
+      font-size: .8rem;
+      font-weight: 600;
+      letter-spacing: .03em;
+      margin-bottom: 18px;
+    }
+    .hero h1 {
+      font-size: clamp(2.2rem, 6vw, 3.4rem);
+      margin: 0 0 12px;
+      font-weight: 800;
+      letter-spacing: -.02em;
+    }
+    .hero p {
+      max-width: 640px;
+      margin: 0 auto 28px;
+      font-size: 1.12rem;
+      color: #cbd5e1;
+    }
+    .btns { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+    .btn {
+      display: inline-block;
+      padding: 12px 22px;
+      border-radius: 10px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: transform .08s ease, background .2s ease;
+    }
+    .btn:active { transform: translateY(1px); }
+    .btn-primary { background: var(--brand); color: #fff; }
+    .btn-primary:hover { background: var(--brand-dark); }
+    .btn-ghost { background: rgba(255,255,255,.08); color: #e2e8f0; border: 1px solid rgba(255,255,255,.2); }
+    .btn-ghost:hover { background: rgba(255,255,255,.16); }
+
+    /* Layout */
+    .wrap { max-width: 920px; margin: 0 auto; padding: 0 20px; }
+    section { padding: 56px 0; }
+    h2 {
+      font-size: 1.6rem;
+      margin: 0 0 8px;
+      text-align: center;
+    }
+    .sub { text-align: center; color: var(--muted); margin: 0 auto 36px; max-width: 560px; }
+
+    /* Features */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 18px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 22px;
+    }
+    .card .ico { font-size: 1.6rem; }
+    .card h3 { margin: 10px 0 6px; font-size: 1.08rem; }
+    .card p { margin: 0; color: var(--muted); font-size: .96rem; }
+
+    /* Steps */
+    .steps { background: #fff; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+    ol.steps-list {
+      max-width: 640px; margin: 0 auto; padding-left: 22px;
+    }
+    ol.steps-list li { margin: 10px 0; }
+    code {
+      background: #f1f5f9;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 2px 6px;
+      font-size: .9em;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    pre {
+      background: var(--bg);
+      color: #e2e8f0;
+      padding: 16px 18px;
+      border-radius: 12px;
+      overflow-x: auto;
+      max-width: 640px;
+      margin: 22px auto 0;
+      font-size: .9rem;
+      line-height: 1.5;
+    }
+
+    /* Footer */
+    footer {
+      background: var(--bg);
+      color: #94a3b8;
+      padding: 40px 20px;
+      text-align: center;
+      font-size: .92rem;
+    }
+    footer a { color: #93c5fd; }
+    .disclaimer {
+      max-width: 620px;
+      margin: 0 auto 18px;
+      color: #cbd5e1;
+      background: rgba(255,255,255,.05);
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 10px;
+      padding: 14px 18px;
+      font-size: .9rem;
+    }
+  </style>
+</head>
+<body>
+
+  <header class="hero">
+    <span class="badge">Versione 0.01 alpha</span>
+    <h1>FeC-Plus 🧾</h1>
+    <p>
+      Scarica fatture elettroniche e corrispettivi dal portale
+      <strong>«Fatture e Corrispettivi»</strong> dell'Agenzia delle Entrate,
+      con una semplice interfaccia grafica e un unico login.
+    </p>
+    <div class="btns">
+      <a class="btn btn-primary" href="https://github.com/denvermotel/FeC-Plus">Vai al repository</a>
+      <a class="btn btn-ghost" href="https://github.com/denvermotel/FeC-Plus?tab=License-1-ov-file">Licenza</a>
+    </div>
+  </header>
+
+  <section>
+    <div class="wrap">
+      <h2>Cosa fa</h2>
+      <p class="sub">Tutte le operazioni partono da un'unica autenticazione al portale AdE, riusata per ogni download.</p>
+      <div class="grid">
+        <div class="card">
+          <div class="ico">🔐</div>
+          <h3>Login unico</h3>
+          <p>Una sola autenticazione (SAM/ForgeRock + scelta dell'utenza di lavoro), senza password sulla riga di comando.</p>
+        </div>
+        <div class="card">
+          <div class="ico">📥</div>
+          <h3>Download fatture</h3>
+          <p>Emesse, ricevute, transfrontaliere e messe a disposizione, con i relativi metadati.</p>
+        </div>
+        <div class="card">
+          <div class="ico">📦</div>
+          <h3>Richieste massive</h3>
+          <p>Fatture emesse/ricevute e corrispettivi: genera e invia l'XML all'Agenzia delle Entrate.</p>
+        </div>
+        <div class="card">
+          <div class="ico">🧾</div>
+          <h3>Bolli virtuali</h3>
+          <p>Generazione del modello F24 in PDF per il trimestre selezionato.</p>
+        </div>
+        <div class="card">
+          <div class="ico">👥</div>
+          <h3>Profili studio</h3>
+          <p>Opera come delega cliente, cassetto dello studio o «me stesso», scegliendo il profilo dalla GUI.</p>
+        </div>
+        <div class="card">
+          <div class="ico">💻</div>
+          <h3>Cross-platform</h3>
+          <p>Interfaccia grafica (tkinter) per Windows e macOS, leggera e senza installazione complessa.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="steps">
+    <div class="wrap">
+      <h2>Avvio rapido</h2>
+      <p class="sub">Richiede Python 3.12.</p>
+      <ol class="steps-list">
+        <li>Clona il repository e crea un ambiente virtuale.</li>
+        <li>Installa le dipendenze con <code>pip install -r requirements.txt</code> e <code>playwright install chromium</code>.</li>
+        <li>Avvia la GUI: <code>avvia_fec.command</code> (macOS), <code>avvia_fec.bat</code> (Windows) o <code>python fec_gui.py</code>.</li>
+      </ol>
+      <pre>git clone https://github.com/denvermotel/FeC-Plus.git
+cd FeC-Plus
+python3.12 -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+playwright install chromium
+python fec_gui.py</pre>
+    </div>
+  </section>
+
+  <footer>
+    <div class="disclaimer">
+      Il software è fornito «così com'è», senza garanzie. L'utente è l'unico
+      responsabile dell'uso che ne viene fatto.
+    </div>
+    <p>
+      Distribuito sotto licenza MIT ·
+      <a href="https://github.com/denvermotel/FeC-Plus">Repository</a> ·
+      <a href="https://github.com/denvermotel/FeC-Plus?tab=License-1-ov-file">Licenza</a>
+    </p>
+    <p>
+      Sviluppato da Giovanni Genna · evoluzione di
+      <a href="https://github.com/claudiopizzillo/FeCscraper">FeCscraper</a>.
+    </p>
+  </footer>
+
+</body>
+</html>

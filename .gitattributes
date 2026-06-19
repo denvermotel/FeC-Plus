@@ -1,0 +1,4 @@
+# Normalizza i fine-riga: LF nel repository
+* text=auto eol=lf
+# Gli script batch di Windows richiedono CRLF
+*.bat text eol=crlf
