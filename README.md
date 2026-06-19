@@ -40,8 +40,7 @@ Il pulsante **«Installa dipendenze»** nella GUI esegue gli stessi passi di pip
 * `fec_gui.py` — interfaccia grafica (schede Test Login, Download Standard, Fatture Massive, Bolli, Corrispettivi).
 
 > ⚙️ La configurazione (CF, PIN, CF studio, cartella destinazione) viene salvata in
-> `fec_gui_config.json` dal pulsante «Salva credenziali» della GUI. Il file **non è
-> versionato** (contiene dati personali): vedi `fec_gui_config.sample.json` per il formato.
+> `fec_gui_config.json` dal pulsante «Salva credenziali» della GUI.
 
 ## 🤝 Credits e Riconoscimenti
 
