@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FeC-Plus — Guida di utilizzo</title>
+  <meta name="description" content="Guida d'uso di FeC-Plus: interfaccia grafica (GUI) e riga di comando (fec_cli.py) per scaricare fatture e corrispettivi dal portale AdE." />
+  <style>
+    :root {
+      --bg: #0f172a; --bg2: #1e293b; --card: #ffffff; --ink: #1e293b;
+      --muted: #64748b; --brand: #2563eb; --brand-dark: #1d4ed8; --border: #e2e8f0;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: var(--ink); background: #f8fafc; line-height: 1.6; }
+    a { color: var(--brand); }
+    .hero { background: linear-gradient(160deg, var(--bg) 0%, var(--bg2) 100%); color: #f1f5f9; padding: 56px 20px 48px; text-align: center; }
+    .hero h1 { font-size: clamp(1.9rem, 5vw, 2.8rem); margin: 0 0 10px; font-weight: 800; letter-spacing: -.02em; }
+    .hero h1 img { height: 1em; width: auto; vertical-align: -0.15em; }
+    .hero p { max-width: 640px; margin: 0 auto; font-size: 1.08rem; color: #cbd5e1; }
+    .home { display: inline-block; margin-bottom: 18px; color: #93c5fd; text-decoration: none; font-weight: 600; }
+    .wrap { max-width: 920px; margin: 0 auto; padding: 0 20px; }
+    section { padding: 40px 0; border-bottom: 1px solid var(--border); }
+    h2 { font-size: 1.5rem; margin: 0 0 4px; }
+    h3 { font-size: 1.1rem; margin: 26px 0 8px; }
+    p.sub { color: var(--muted); margin: 0 0 20px; }
+    ul { line-height: 1.8; }
+    code { background: #f1f5f9; border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; font-size: .9em; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    pre { background: var(--bg); color: #e2e8f0; padding: 16px 18px; border-radius: 12px; overflow-x: auto; font-size: .88rem; line-height: 1.55; }
+    pre code { background: none; border: 0; padding: 0; color: inherit; }
+    table { width: 100%; border-collapse: collapse; margin: 8px 0 4px; font-size: .94rem; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { background: #f1f5f9; font-weight: 700; }
+    td code { white-space: nowrap; }
+    .note { background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; border-radius: 10px; padding: 12px 16px; margin: 18px 0; font-size: .95rem; }
+    footer { background: var(--bg); color: #94a3b8; padding: 40px 20px; text-align: center; font-size: .92rem; }
+    footer a { color: #93c5fd; }
+    .footnav { margin: 0 0 16px; font-weight: 600; }
+    .footnav strong { color: #cbd5e1; }
+    .disclaimer { max-width: 620px; margin: 0 auto 18px; color: #cbd5e1; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1); border-radius: 10px; padding: 14px 18px; font-size: .9rem; }
+  </style>
+</head>
+<body>
+
+  <header class="hero">
+    <a class="home" href="index.html">← Home</a>
+    <h1><img src="logo.png" alt="Logo FeC-Plus"> FeC-Plus — Guida</h1>
+    <p>Due modi d'uso: l'<strong>interfaccia grafica</strong> (GUI) e la <strong>riga di comando</strong> (<code>fec_cli.py</code>), senza GUI.</p>
+  </header>
+
+  <section>
+    <div class="wrap">
+      <h2>Requisiti</h2>
+      <p class="sub">Python 3.12 e le dipendenze del progetto.</p>
+      <pre><code>pip install -r requirements.txt
+# solo se si usa il backend «browser»:
+playwright install chromium</code></pre>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2>Interfaccia grafica (GUI)</h2>
+      <p class="sub">Il modo più semplice: doppio click sul launcher, o avvio da terminale.</p>
+      <ul>
+        <li><strong>Windows</strong>: <code>avvia_fec.bat</code> &nbsp;·&nbsp; <strong>macOS</strong>: <code>avvia_fec.command</code></li>
+        <li>Versione sviluppatore (Test Login, cattura HAR, scelta backend/headless): <code>avvia_fec_dev.bat</code> / <code>avvia_fec_dev.command</code></li>
+        <li>Oppure: <code>python fec_gui.py</code></li>
+      </ul>
+
+      <h3>Cartelle di download (Impostazioni)</h3>
+      <p class="sub">In <strong>⚙ Impostazioni</strong> si imposta la cartella di download di default e, se serve, una cartella diversa per ogni tipo di documento.</p>
+      <ul>
+        <li>Per impostazione predefinita tutti i download vanno in <strong>un'unica cartella</strong>, in sottocartelle per tipo e codice fiscale (es. <code>FattureEmesse_&lt;CF&gt;</code>).</li>
+        <li>Spuntando <strong>«personalizza»</strong> accanto a una classe (fatture emesse, ricevute, transfrontaliere, massive, corrispettivi, bolli) si assegna a quel tipo una <strong>cartella dedicata</strong>.</li>
+        <li>L'opzione <strong>«senza sottocartella»</strong> (per ciascun tipo) salva i file <strong>direttamente</strong> nella cartella scelta, senza creare la sottocartella: utile per importarli nelle directory dei <strong>gestionali di contabilità</strong>.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2>Riga di comando (<code>fec_cli.py</code>)</h2>
+      <p class="sub">Stesso motore della GUI, senza interfaccia. Fa il login e scarica passando tutto come argomenti.</p>
+
+      <h3>Sintassi</h3>
+      <pre><code>python fec_cli.py [ARGOMENTI DI ACCESSO] COMANDO [ARGOMENTI DEL COMANDO]</code></pre>
+
+      <h3>Argomenti di accesso (comuni a tutti i comandi)</h3>
+      <table>
+        <tr><th>Argomento</th><th>Descrizione</th></tr>
+        <tr><td><code>--cf</code></td><td>CF Fisconline o nome utente Entratel. <em>Obbligatorio.</em></td></tr>
+        <tr><td><code>--pin</code></td><td>PIN. <em>Obbligatorio.</em></td></tr>
+        <tr><td><code>--password</code></td><td>Password. <em>Obbligatorio</em> (oppure <code>--password-env</code>).</td></tr>
+        <tr><td><code>--password-env VAR</code></td><td>Legge la password dalla variabile d'ambiente <code>VAR</code> (consigliato).</td></tr>
+        <tr><td><code>--cfstudio</code></td><td>CF dello studio incaricante (profili 1 e 2).</td></tr>
+        <tr><td><code>--cf-cliente</code></td><td>CF del cliente delegante.</td></tr>
+        <tr><td><code>--piva</code></td><td>P.IVA dell'utenza di lavoro (richiesta da massive e bolli).</td></tr>
+        <tr><td><code>--profilo {1,2,3}</code></td><td>1 = studio→cliente · 2 = cassetto studio · 3 = me stesso. Default: 1.</td></tr>
+        <tr><td><code>--backend {requests,browser}</code></td><td>Backend di login. Default: <code>requests</code> (nessun browser).</td></tr>
+        <tr><td><code>--no-headless</code></td><td>Mostra la finestra del browser (solo backend <code>browser</code>).</td></tr>
+        <tr><td><code>--dest DIR</code></td><td>Cartella di destinazione dei download. Default: <code>./Download</code>.</td></tr>
+        <tr><td><code>--dry-run</code></td><td>Mostra cosa verrebbe eseguito, senza fare login né download.</td></tr>
+      </table>
+
+      <h3>Comandi</h3>
+      <table>
+        <tr><th>Comando</th><th>Cosa scarica</th><th>Argomenti</th><th>Formato date</th></tr>
+        <tr><td><code>emesse</code></td><td>Fatture emesse</td><td><code>--dal --al</code></td><td>ggmmaaaa</td></tr>
+        <tr><td><code>ricevute</code></td><td>Fatture ricevute</td><td><code>--dal --al [--tipo-data 1|2]</code></td><td>ggmmaaaa</td></tr>
+        <tr><td><code>transfrontaliere-emesse</code></td><td>Transfrontaliere emesse</td><td><code>--dal --al</code></td><td>ggmmaaaa</td></tr>
+        <tr><td><code>transfrontaliere-ricevute</code></td><td>Transfrontaliere ricevute</td><td><code>--dal --al</code></td><td>ggmmaaaa</td></tr>
+        <tr><td><code>messe-a-disposizione</code></td><td>Fatture messe a disposizione</td><td><code>--dal --al</code></td><td>ggmmaaaa</td></tr>
+        <tr><td><code>massive-emesse</code></td><td>Richiesta massiva emesse</td><td><code>--dal --al</code></td><td>aaaa-mm-gg</td></tr>
+        <tr><td><code>massive-ricevute-emissione</code></td><td>Massiva ricevute (data emissione)</td><td><code>--dal --al</code></td><td>aaaa-mm-gg</td></tr>
+        <tr><td><code>massive-ricevute-ricezione</code></td><td>Massiva ricevute (data ricezione)</td><td><code>--dal --al</code></td><td>aaaa-mm-gg</td></tr>
+        <tr><td><code>corrispettivi</code></td><td>Richiesta massiva corrispettivi</td><td><code>--dal --al</code></td><td>aaaa-mm-gg</td></tr>
+        <tr><td><code>bolli</code></td><td>Bolli virtuali → PDF F24</td><td><code>--trimestre 1|2|3|4 --anno aaaa</code></td><td>—</td></tr>
+      </table>
+      <p class="sub" style="margin-top:6px"><code>--tipo-data</code>: 1 = ricerca per data ricezione (default), 2 = per data emissione.</p>
+
+      <div class="note">
+        ⚠️ <strong>Sicurezza:</strong> le credenziali passate come argomenti restano visibili nella
+        cronologia della shell e nell'elenco dei processi. Preferire <code>--password-env</code> per
+        non scrivere la password in chiaro nel comando. La password non viene comunque mai salvata su disco.
+      </div>
+
+      <h3>Esempi</h3>
+      <pre><code># Fatture emesse di gennaio 2026 (studio → cliente)
+python fec_cli.py --cf RSSMRA80A01H501U --pin 1234 --password segreta \
+    --cfstudio 01234567890 --cf-cliente 09876543210 \
+    emesse --dal 01012026 --al 31012026
+
+# Corrispettivi 1° trimestre, password da variabile d'ambiente
+set FEC_PWD=segreta
+python fec_cli.py --cf RSSMRA80A01H501U --pin 1234 --password-env FEC_PWD \
+    --cf-cliente 09876543210 --piva 09876543210 \
+    corrispettivi --dal 2026-01-01 --al 2026-03-31
+
+# Bolli virtuali 1° trimestre 2026 → PDF F24
+python fec_cli.py --cf RSSMRA80A01H501U --pin 1234 --password-env FEC_PWD \
+    --cf-cliente 09876543210 --piva 09876543210 \
+    bolli --trimestre 1 --anno 2026
+
+# Vedere cosa verrebbe eseguito, senza login
+python fec_cli.py --cf X --pin Y --password Z --dry-run emesse --dal 01012026 --al 31012026</code></pre>
+
+      <h3>Codici di uscita</h3>
+      <table>
+        <tr><th>Codice</th><th>Significato</th></tr>
+        <tr><td><code>0</code></td><td>Operazione completata.</td></tr>
+        <tr><td><code>1</code></td><td>Errore durante il download (es. sessione scaduta).</td></tr>
+        <tr><td><code>2</code></td><td>Login fallito (credenziali/PIN errati o argomenti mancanti).</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    <p class="footnav">
+      <a href="index.html">Home</a> ·
+      <strong>Guida</strong> ·
+      <a href="changelog.html">Changelog</a>
+    </p>
+    <div class="disclaimer">
+      Il software è fornito «così com'è», senza garanzie. L'utente è l'unico
+      responsabile dell'uso che ne viene fatto.
+    </div>
+    <p>
+      Distribuito sotto licenza MIT ·
+      <a href="https://github.com/denvermotel/FeC-Plus">Repository</a> ·
+      <a href="https://github.com/denvermotel/FeC-Plus?tab=MIT-1-ov-file">Licenza</a>
+    </p>
+    <p>
+      Sviluppato da Giovanni Genna · fork di
+      <a href="https://github.com/socrat3/FeCscraper">FeCscraper di socrat3</a>.
+    </p>
+  </footer>
+
+</body>
+</html>

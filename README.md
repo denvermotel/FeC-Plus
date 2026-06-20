@@ -1,6 +1,6 @@
 # FeC-Plus 🧾
 
-**Versione 0.01 alpha**
+**Versione 0.02 alpha**
 
 **FeC-Plus** è uno strumento per automatizzare l'accesso e lo scaricamento dei dati dal portale "Fatture e Corrispettivi" dell'Agenzia delle Entrate, tramite una semplice interfaccia grafica.
 
@@ -36,11 +36,23 @@ Il pulsante **«Installa dipendenze»** nella GUI esegue gli stessi passi di pip
 ## 🧱 Struttura
 
 * `ade_auth.py` — autenticazione al nuovo portale AdE (backend `browser` Playwright o `requests`).
-* `fec_download.py` — funzioni di download/invio a partire da una sessione già autenticata.
+* `fec_download.py` — funzioni di download/invio a partire da una sessione già autenticata (libreria pura).
 * `fec_gui.py` — interfaccia grafica (schede Test Login, Download Standard, Fatture Massive, Bolli, Corrispettivi).
+* `fec_cli.py` — **download da riga di comando** (senza GUI): login + scarico passando accesso e parametri come argomenti. Vedi la [Guida](https://denvermotel.github.io/FeC-Plus/guida.html).
+* `fec_store.py` — salvataggio di credenziali (cifrate) e preferenze, separati.
 
-> ⚙️ La configurazione (CF, PIN, CF studio, cartella destinazione) viene salvata in
-> `fec_gui_config.json` dal pulsante «Salva credenziali» della GUI.
+Esempio d'uso da riga di comando:
+
+```bash
+python fec_cli.py --cf RSSMRA80A01H501U --pin 1234 --password-env FEC_PWD \
+    --cfstudio 01234567890 --cf-cliente 09876543210 \
+    emesse --dal 01012026 --al 31012026
+```
+
+> ⚙️ Le **credenziali** (CF, PIN, CF studio) vengono salvate cifrate in `fec_credentials.dat`
+> e le **preferenze** (cartelle di download per tipo di documento, profilo, ecc.) in
+> `fec_settings.json`, dalla GUI («Salva credenziali» e «⚙ Impostazioni»). La password non
+> viene mai salvata.
 
 ## 🤝 Credits e Riconoscimenti
 

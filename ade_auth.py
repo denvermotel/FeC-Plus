@@ -1,3 +1,4 @@
+# FeC-Plus — v0.02 alpha
 """
 ade_auth.py — Autenticazione al portale AdE "Fatture e Corrispettivi" (nuovo login).
 
@@ -26,15 +27,17 @@ Espone una sola API:
 
 con due backend:
   - "browser"  : Playwright Chromium (affidabile, gestisce la SPA/JS; default).
-  - "requests" : flusso ForgeRock via sole richieste HTTP (leggero ma fragile).
+  - "requests" : login via API JSON /api/login/telematico + scelta utenza via API
+                 REST di instradamento (leggero, senza browser; vedi C.1).
 
 In caso di problema solleva AuthError(step, dettaglio).
 """
 
 from __future__ import annotations
 
-__version__ = "0.01 alpha"
+__version__ = "0.02 alpha"
 
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -62,6 +65,26 @@ SAM_LOGIN_URL = (
 # Entry point del servizio di consultazione (innesca il wizard di instradamento).
 CONS_WEB = f"{IVASERVIZI}/cons/cons-web/"
 WIZARD_URL = f"{IVASERVIZI}/instr/InstradamentofcWeb/wizard"
+
+# Login "telematico" dell'AdE: una POST JSON {username,password,pin} che imposta i
+# cookie SSO (SIAMPE…). Sostituisce il vecchio form ForgeRock /sam/UI/Login.
+LOGIN_API = f"{IAMPE}/api/login/telematico"
+
+# Portale: la GET a initPortale (anche se risponde 501) "scambia" i cookie SAM con i
+# cookie SSO del portale (LtpaToken2, cookieutentee0194, AE, portaleCookie, domain
+# .agenziaentrate.gov.it) → SENZA questi l'app di instradamento risponde 403.
+PORTALE = "https://portale.agenziaentrate.gov.it"
+PORTALE_HOME = f"{PORTALE}/PortaleWeb/home?to=FATBTB"
+PORTALE_INIT = f"{PORTALE}/portale-rest/rs/initPortale"
+
+# App di instradamento (scelta utenza di lavoro): home SPA + API REST.
+INSTR_HOME = f"{IVASERVIZI}/instr/InstradamentofcWeb/home"
+INSTR_REST = f"{IVASERVIZI}/instr/instradamento-fatture-rest/rs"
+
+# x-appl: identificativo applicativo SOGEI richiesto dalle API di instradamento;
+# viene restituito da initLight nell'header omonimo. Valore di fallback osservato
+# in cattura (può cambiare a un redeploy dell'AdE → rieseguire la cattura HAR).
+X_APPL_DEFAULT = "18a9b6e6f69bb94b5e12f67cb2d54c4f791f5b12"
 
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -231,7 +254,7 @@ def _finalizza(s: requests.Session, backend: str, utenza: str,
 
 def _autentica_browser(creds: Creds, headless: bool = False,
                         timeout_ms: int = 180_000,
-                        log=print) -> AuthResult:
+                        log=print, capture_dir: str | None = None) -> AuthResult:
     try:
         from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
     except ImportError:
@@ -242,6 +265,11 @@ def _autentica_browser(creds: Creds, headless: bool = False,
         )
 
     note: list[str] = []
+    har_path = log_path = None
+    if capture_dir:
+        har_path, log_path = _capture_paths(capture_dir)
+        log(f"Cattura traffico ATTIVA → {har_path}")
+
     with sync_playwright() as p:
         try:
             browser = p.chromium.launch(headless=headless)
@@ -250,9 +278,16 @@ def _autentica_browser(creds: Creds, headless: bool = False,
                 "browser",
                 f"Impossibile avviare Chromium ({exc}). Esegui: playwright install chromium",
             )
-        context = browser.new_context(user_agent=_UA, ignore_https_errors=True)
+        ctx_kwargs = dict(user_agent=_UA, ignore_https_errors=True)
+        if har_path:
+            ctx_kwargs.update(record_har_path=har_path, record_har_mode="full",
+                              record_har_content="embed")
+        context = browser.new_context(**ctx_kwargs)
         page = context.new_page()
         page.set_default_timeout(30_000)
+        if log_path:
+            _attach_network_log(page, log_path, log)
+            note.append(f"Cattura traffico salvata in {har_path}")
 
         try:
             # 1) Pagina di login SAM
@@ -295,8 +330,15 @@ def _autentica_browser(creds: Creds, headless: bool = False,
 
             s = _session_da_browser(context)
         finally:
+            # context.close() prima di browser.close() per flushare l'HAR su disco.
+            try:
+                context.close()
+            except Exception:
+                pass
             browser.close()
 
+    if har_path:
+        log(f"\n📦 Cattura login salvata:\n   HAR: {har_path}\n   LOG: {log_path}")
     return _finalizza(s, "browser", creds.piva, note)
 
 
@@ -655,6 +697,70 @@ def _dump_html(page, filename: str) -> None:
         pass
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Cattura traffico login (capture-first per C.1: ricostruzione del flusso requests)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _capture_paths(capture_dir: str) -> tuple[str, str]:
+    """Crea `capture_dir` e ritorna i percorsi (HAR, LOG) con timestamp."""
+    import os
+    os.makedirs(capture_dir, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = os.path.join(capture_dir, f"capture_login_{ts}")
+    return base + ".har", base + ".log"
+
+
+def _attach_network_log(page, log_path: str, log) -> None:
+    """
+    Registra richieste/risposte rilevanti del login (ForgeRock SAM, wizard di
+    instradamento, token B2B) su `log_path` (con i body POST, per ricostruire i
+    payload ForgeRock) e una riga sintetica in console. Solo per il backend browser.
+
+    ⚠️ Il file contiene credenziali in chiaro: resta in `_materiale/` (fuori da Git).
+    """
+    interessanti = ("iampe.agenziaentrate.gov.it", "InstradamentofcWeb",
+                    "tokenB2BCookie", "/sam/")
+
+    def _rilevante(url: str) -> bool:
+        return any(k in url for k in interessanti)
+
+    def _scrivi(riga: str) -> None:
+        try:
+            with open(log_path, "a", encoding="utf-8") as fh:
+                fh.write(riga + "\n")
+        except Exception:
+            pass
+
+    def on_request(req):
+        try:
+            if not _rilevante(req.url):
+                return
+            riga = f"→ {req.method} {req.url}"
+            try:
+                post = req.post_data
+            except Exception:
+                post = None
+            if post:
+                riga += f"\n    body: {post}"
+            _scrivi(riga)
+            log(f"   ↪ {req.method} {req.url[:110]}")
+        except Exception:
+            pass
+
+    def on_response(resp):
+        try:
+            if not _rilevante(resp.url):
+                return
+            ct = resp.headers.get("content-type", "")
+            _scrivi(f"← {resp.status} {resp.url}  [{ct}]")
+        except Exception:
+            pass
+
+    page.on("request", on_request)
+    page.on("response", on_response)
+    _scrivi(f"# Cattura login AdE — {datetime.now().isoformat()}")
+
+
 def _session_da_browser(context) -> requests.Session:
     """Costruisce una requests.Session con i cookie del browser."""
     s = requests.Session()
@@ -671,76 +777,242 @@ def _session_da_browser(context) -> requests.Session:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _autentica_requests(creds: Creds, log=print) -> AuthResult:
+    """
+    Login "solo requests" ricostruito dal traffico reale (cattura HAR 2026-06-19):
+      1) POST {IAMPE}/api/login/telematico con JSON {username,password,pin} → cookie SSO.
+      2) bootstrap della sessione di instradamento (portale → InstradamentofcWeb/home).
+      3) wizard scelta utenza via API REST (initLight/wizardTemplate/procediWizard/
+         setUserChoice), che attiva l'utenza di lavoro.
+      4) token B2B/header (comune al backend browser).
+    """
     s = requests.Session()
     s.headers.update({"User-Agent": _UA, "Connection": "keep-alive"})
 
-    # 1) GET pagina di login per leggere i campi nascosti ForgeRock correnti
-    log("Carico la pagina di login SAM...")
+    # 1) Login via API JSON dell'AdE (sostituisce il vecchio form ForgeRock).
+    log("Carico la pagina di login...")
     try:
-        r = s.get(SAM_LOGIN_URL, verify=False, timeout=30)
-    except requests.RequestException as exc:
-        raise AuthError("login-get", f"Pagina di login non raggiungibile: {exc}")
+        s.get(SAM_LOGIN_URL, verify=False, timeout=30)  # warm-up: cookie iniziali
+    except requests.RequestException:
+        pass
 
-    hidden = dict(re.findall(
-        r'<input[^>]*type="hidden"[^>]*name="([^"]+)"[^>]*value="([^"]*)"', r.text))
-    for k in ("goto", "gotoOnFail", "SunQueryParamsString", "encoded",
-              "gx_charset", "newpost"):
-        hidden.setdefault(k, "")
-
-    payload = {
-        **hidden,
-        "IDToken1": creds.nomeutente,
-        "IDToken2": creds.password,
-        "IDToken3": creds.pin,
+    log("Invio le credenziali al login telematico AdE...")
+    login_headers = {
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json",
+        "Origin": IAMPE,
+        "Referer": SAM_LOGIN_URL,
+        "User-Agent": _UA,
     }
-
-    # 2) POST credenziali sul punto di autenticazione ForgeRock
-    log("Invio le credenziali Entratel...")
+    payload = {"username": creds.nomeutente, "password": creds.password, "pin": creds.pin}
     try:
-        r = s.post(SAM_LOGIN_URL, data=payload, verify=False, timeout=30,
-                   allow_redirects=True)
+        r = s.post(LOGIN_API, data=json.dumps(payload), headers=login_headers,
+                   verify=False, timeout=30)
     except requests.RequestException as exc:
-        raise AuthError("login-post", f"Invio credenziali fallito: {exc}")
+        raise AuthError("login-post", f"Login telematico non raggiungibile: {exc}")
 
-    if "iampe.agenziaentrate.gov.it" in r.url:
+    if r.status_code != 200 or "SIAMPE" not in s.cookies.get_dict():
         msg = ""
-        m = re.search(r'class="[^"]*alert-danger[^"]*"[^>]*>(.*?)<', r.text, re.S)
-        if m:
-            msg = re.sub(r"\s+", " ", m.group(1)).strip()
+        try:
+            j = r.json()
+            msg = j.get("error") or j.get("message") or ""
+        except ValueError:
+            msg = (r.text or "").strip()[:200]
         raise AuthError(
             "login",
-            msg or "Credenziali rifiutate dal SAM, oppure il flusso richiede "
-                   "passaggi JS non riproducibili via requests: usa il backend 'browser'.",
+            msg or f"Login rifiutato (HTTP {r.status_code}): credenziali, PIN o "
+                   "nome utente non validi.",
         )
+    log("Login riuscito (cookie SSO ottenuti).")
 
-    # 3) Wizard scelta utenza di lavoro (InstradamentofcWeb)
-    log("Seleziono l'utenza di lavoro...")
-    _wizard_requests(s, creds)
+    # 2) Bootstrap: lo scambio cookie SAM→portale (initPortale, anche se 501) minta i
+    #    cookie SSO del portale (LtpaToken2…) necessari ad autorizzare l'instradamento.
+    log("Inizializzo la sessione del portale...")
+    for url in (PORTALE_HOME, f"{PORTALE_INIT}?v={unix_time()}&to=FATBTB", INSTR_HOME):
+        try:
+            s.get(url, verify=False, timeout=30)
+        except requests.RequestException:
+            pass
+    if "LtpaToken2" not in s.cookies.get_dict():
+        log("   ⚠️  LtpaToken2 non ottenuto dal portale: l'instradamento potrebbe dare 403.")
 
-    # 4) Token + header
+    # 3) Wizard scelta utenza di lavoro via API REST.
+    log("Configuro l'utenza di lavoro...")
+    _wizard_requests(s, creds, log)
+
+    # 4) Ingresso nell'app di consultazione: /dp/PI2FC imposta il cookie FATSC (sessione
+    #    cons) che, insieme al B2BCookie ottenuto da setUserChoice, autorizza il token B2B.
+    log("Apro l'app di consultazione...")
+    for url in (f"{IVASERVIZI}/dp/PI2FC", CONS_WEB):
+        try:
+            s.get(url, headers={"User-Agent": _UA}, verify=False, timeout=30)
+        except requests.RequestException:
+            pass
+    if "FATSC" not in s.cookies.get_dict():
+        log("   ⚠️  FATSC non ottenuto: il token B2B potrebbe fallire.")
+
+    # 5) Token + header
     log("Ottengo i token di servizio...")
     return _finalizza(s, "requests", creds.piva)
 
 
-def _wizard_requests(s: requests.Session, creds: Creds) -> None:
-    """Invio best-effort dei parametri del wizard di instradamento."""
-    tipo = _PROFILO_TIPOINCARICANTE.get(creds.profilo, "incaricoDelega")
-    incaricante = f"{creds.cfstudio}-000" if creds.cfstudio else ""
-    try:
-        s.get(WIZARD_URL, verify=False, timeout=30)
-    except requests.RequestException:
-        return
-    data = {
-        "tipoincaricante": tipo,
-        "incaricante": incaricante,
-        "cfDelegante": creds.cf_cliente if creds.profilo == PROFILO_STUDIO_CLIENTE else "",
-        "sceltapiva": creds.piva,
+def _instr_headers(x_appl: str) -> dict:
+    """Header per le API di instradamento (scelta utenza)."""
+    return {
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json",
+        "Origin": IVASERVIZI,
+        "Referer": WIZARD_URL,
+        "User-Agent": _UA,
+        "x-appl": x_appl,
     }
+
+
+def _incarichi(template: dict) -> list:
+    """Estrae richiestaIncarichi.incarichi[] dal template (lista, eventualmente vuota)."""
+    return (((template or {}).get("richiestaIncarichi") or {}).get("incarichi")) or []
+
+
+def _dump_debug(filename: str, text: str) -> None:
+    """Scrive `text` in un file di debug accanto al modulo (best-effort)."""
     try:
-        s.post(WIZARD_URL, data={k: v for k, v in data.items() if v},
-               verify=False, timeout=30)
+        import os
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text or "")
+    except Exception:
+        pass
+
+
+def _trova_incarico(template: dict, cfstudio: str) -> dict | None:
+    """
+    Individua, fra gli incarichi restituiti da wizardTemplate, quello dello studio
+    indicato (match su incaricante.cf). Ritorna l'oggetto incarico, o None.
+    """
+    incarichi = _incarichi(template)
+    if not incarichi:
+        return None
+    if cfstudio:
+        for inc in incarichi:
+            if (inc.get("incaricante") or {}).get("cf") == cfstudio:
+                return inc
+    return incarichi[0] if len(incarichi) == 1 else None
+
+
+def _wizard_requests(s: requests.Session, creds: Creds, log=print) -> None:
+    """
+    Replica via API REST la scelta dell'utenza di lavoro fatta dal wizard SPA:
+      GET  initLight        → header x-appl da riusare
+      GET  wizardTemplate   → elenco incarichi disponibili
+      POST procediWizard    → tipoutenza, poi delega/incarico
+      POST setUserChoice    → conferma; attiva l'utenza (200 = ok).
+    Il campo `incaricante` è l'oggetto incarico serializzato in JSON (come fa la SPA).
+    """
+    x_appl = X_APPL_DEFAULT
+
+    # init: aggiorna x-appl dall'header di risposta
+    try:
+        r = s.get(f"{INSTR_REST}/initLight?v={unix_time()}",
+                  headers=_instr_headers(x_appl), verify=False, timeout=30)
+        nuovo = r.headers.get("x-appl")
+        if nuovo:
+            x_appl = nuovo
+        log(f"   initLight HTTP {r.status_code}, x-appl {'da risposta' if nuovo else 'fallback'}")
+    except requests.RequestException as exc:
+        log(f"   ⚠️  initLight non raggiungibile: {exc}")
+
+    # template con gli incarichi disponibili
+    template = {}
+    try:
+        r = s.get(f"{INSTR_REST}/wizardTemplate?v={unix_time()}",
+                  headers=_instr_headers(x_appl), verify=False, timeout=30)
+        log(f"   wizardTemplate HTTP {r.status_code}")
+        try:
+            template = r.json()
+        except ValueError:
+            _dump_debug("_debug_wizardTemplate_raw.txt", r.text)
+            log(f"   ⚠️  wizardTemplate non JSON (HTTP {r.status_code}, "
+                "salvato _debug_wizardTemplate_raw.txt)")
+    except requests.RequestException as exc:
+        log(f"   ⚠️  wizardTemplate non raggiungibile: {exc}")
+
+    tipoutenza = "soloPerMe" if creds.profilo == PROFILO_ME_STESSO else "incaricato"
+    tipoincaricante = _PROFILO_TIPOINCARICANTE.get(creds.profilo, "incaricoDelega")
+
+    # step 1: scelta del tipo di utenza. La risposta contiene anch'essa gli incarichi:
+    # la usiamo come fonte di fallback se wizardTemplate non li avesse restituiti.
+    try:
+        r = s.post(f"{INSTR_REST}/procediWizard?v={unix_time()}",
+                   headers=_instr_headers(x_appl),
+                   data=json.dumps({"tipoutenza": tipoutenza}), verify=False, timeout=30)
+        log(f"   procediWizard(tipoutenza) HTTP {r.status_code}")
+        if not _incarichi(template):
+            try:
+                template = r.json()
+            except ValueError:
+                pass
+    except requests.RequestException as exc:
+        log(f"   ⚠️  procediWizard non raggiungibile: {exc}")
+
+    # Me stesso: nessun incarico, si conferma direttamente il proprio CF.
+    if creds.profilo == PROFILO_ME_STESSO:
+        _setuserchoice(s, x_appl, {"tipoutenza": "soloPerMe", "cf": creds.nomeutente}, log)
+        return
+
+    # Studio: serve l'oggetto incarico corrispondente al CF studio.
+    incarico = _trova_incarico(template, creds.cfstudio)
+    if incarico is None:
+        disponibili = [(i.get("incaricante") or {}).get("cf", "?") for i in _incarichi(template)]
+        _dump_debug("_debug_wizardTemplate.txt", json.dumps(template, indent=2, ensure_ascii=False))
+        raise AuthError(
+            "utenza",
+            f"Incarico per lo studio «{creds.cfstudio}» non trovato. "
+            + (f"Incarichi disponibili (CF incaricante): {disponibili}. "
+               if disponibili else
+               "Nessun incarico restituito dal portale (template vuoto: possibile "
+               "x-appl scaduto o sessione non valida; salvato _debug_wizardTemplate.txt). ")
+            + "Verifica il CF Studio o completa col backend browser.",
+        )
+    incaricante_str = json.dumps(incarico, separators=(",", ":"), ensure_ascii=False)
+    cf_lavoro = creds.cf_cliente if creds.profilo == PROFILO_STUDIO_CLIENTE else creds.cfstudio
+
+    base = {
+        "tipoutenza": tipoutenza,
+        "incaricante": incaricante_str,
+        "tipoincaricante": tipoincaricante,
+        "cfDelegante": cf_lavoro,
+    }
+
+    # step 2: procedi con delega/incarico (carica le P.IVA dell'utenza)
+    try:
+        s.post(f"{INSTR_REST}/procediWizard?v={unix_time()}",
+               headers=_instr_headers(x_appl),
+               data=json.dumps({**base, "pIva": None}), verify=False, timeout=30)
     except requests.RequestException:
         pass
+
+    # step 3: conferma definitiva della scelta (attiva l'utenza di lavoro)
+    _setuserchoice(s, x_appl, {**base, "cf": cf_lavoro}, log)
+
+
+def _setuserchoice(s: requests.Session, x_appl: str, body: dict, log) -> None:
+    """POST setUserChoice; solleva AuthError se la scelta utenza non è accettata."""
+    try:
+        r = s.post(f"{INSTR_REST}/setUserChoice?v={unix_time()}",
+                   headers=_instr_headers(x_appl), data=json.dumps(body),
+                   verify=False, timeout=30)
+    except requests.RequestException as exc:
+        raise AuthError("utenza", f"Conferma utenza fallita: {exc}")
+    if r.status_code != 200:
+        msg = ""
+        try:
+            msg = r.json().get("error") or r.json().get("message") or ""
+        except ValueError:
+            msg = (r.text or "").strip()[:200]
+        raise AuthError(
+            "utenza",
+            msg or f"Scelta utenza di lavoro non accettata (HTTP {r.status_code}).",
+        )
+    log("Utenza di lavoro attivata.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -748,7 +1020,8 @@ def _wizard_requests(s: requests.Session, creds: Creds) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def autentica(creds: Creds, backend: str = "browser",
-              headless: bool = False, log=print) -> AuthResult:
+              headless: bool = False, log=print,
+              capture_dir: str | None = None) -> AuthResult:
     """
     Esegue l'autenticazione completa al portale AdE e restituisce un AuthResult
     con sessione e header pronti per le chiamate /cons/cons-services/rs/...
@@ -757,10 +1030,15 @@ def autentica(creds: Creds, backend: str = "browser",
       "browser"  -> Playwright (default, affidabile; headless opzionale)
       "requests" -> sole richieste HTTP (leggero ma fragile)
 
+    capture_dir: se valorizzato (solo backend browser), registra il traffico di rete
+      del login/wizard in `<capture_dir>/capture_login_<ts>.har` (HAR completo) e in un
+      `.log` leggibile, per ricostruire il flusso ForgeRock nel backend requests (C.1).
+
     Solleva AuthError(step, dettaglio) in caso di fallimento.
     """
     if backend == "requests":
         return _autentica_requests(creds, log=log)
     if backend == "browser":
-        return _autentica_browser(creds, headless=headless, log=log)
+        return _autentica_browser(creds, headless=headless, log=log,
+                                  capture_dir=capture_dir)
     raise AuthError("config", f"Backend sconosciuto: {backend!r} (usa 'browser' o 'requests').")

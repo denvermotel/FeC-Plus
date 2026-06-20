@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>FeC-Plus — Fatture e Corrispettivi AdE</title>
+  <title>FeC-Plus - Fatture e Corrispettivi AdE</title>
   <meta name="description" content="FeC-Plus: strumento con interfaccia grafica per scaricare fatture elettroniche e corrispettivi dal portale Fatture e Corrispettivi dell'Agenzia delle Entrate." />
   <style>
     :root {
@@ -149,8 +149,8 @@
 <body>
 
   <header class="hero">
-    <span class="badge">Versione 0.01 alpha</span>
-    <h1>FeC-Plus 🧾</h1>
+    <span class="badge">Versione 0.02 alpha</span>
+    <h1><img src="logo.png" alt="Logo FeC-Plus" style="height:1em;width:auto;vertical-align:-0.15em"> FeC-Plus</h1>
     <p>
       Scarica fatture elettroniche e corrispettivi dal portale
       <strong>«Fatture e Corrispettivi»</strong> dell'Agenzia delle Entrate,
@@ -158,7 +158,9 @@
     </p>
     <div class="btns">
       <a class="btn btn-primary" href="https://github.com/denvermotel/FeC-Plus">Vai al repository</a>
-      <a class="btn btn-ghost" href="https://github.com/denvermotel/FeC-Plus?tab=License-1-ov-file">Licenza</a>
+      <a class="btn btn-primary" href="guida.html">Guida di utilizzo</a>
+      <a class="btn btn-ghost" href="changelog.html">Changelog</a>
+      <a class="btn btn-ghost" href="https://github.com/denvermotel/FeC-Plus?tab=MIT-1-ov-file">Licenza</a>
     </div>
   </header>
 
@@ -220,6 +222,36 @@ python fec_gui.py</pre>
     </div>
   </section>
 
+  <section>
+    <div class="wrap">
+      <h2>🤝 Credits e Riconoscimenti</h2>
+      <p class="sub">
+        FeC-Plus nasce come evoluzione e ampliamento di progetti open source
+        preesistenti. L'aggiunta dell'interfaccia grafica e delle nuove logiche
+        si poggia su solide fondamenta scritte da altri sviluppatori.
+      </p>
+      <p style="text-align:center; max-width:640px; margin:0 auto 16px;">
+        Un ringraziamento speciale va agli autori originali:
+      </p>
+      <ul style="max-width:640px; margin:0 auto 24px; line-height:1.7;">
+        <li>
+          <a href="https://github.com/claudiopizzillo">Claudio Pizzillo</a>
+          per aver ideato e sviluppato il core originale di
+          <a href="https://github.com/claudiopizzillo/FeCscraper">FeCscraper</a>.
+        </li>
+        <li>
+          <a href="https://github.com/socrat3">Salvatore Crapanzano (@socrat3)</a>
+          per le successive e preziose migliorie introdotte nel suo
+          <a href="https://github.com/socrat3/FeCscraper">fork</a>.
+        </li>
+      </ul>
+      <p style="text-align:center; max-width:640px; margin:0 auto;">
+        Il progetto attuale (FeC-Plus) è sviluppato e mantenuto da
+        <a href="https://github.com/denvermotel">Giovanni Genna (@denvermotel)</a>.
+      </p>
+    </div>
+  </section>
+
   <footer>
     <div class="disclaimer">
       Il software è fornito «così com'è», senza garanzie. L'utente è l'unico
@@ -228,11 +260,11 @@ python fec_gui.py</pre>
     <p>
       Distribuito sotto licenza MIT ·
       <a href="https://github.com/denvermotel/FeC-Plus">Repository</a> ·
-      <a href="https://github.com/denvermotel/FeC-Plus?tab=License-1-ov-file">Licenza</a>
+      <a href="https://github.com/denvermotel/FeC-Plus?tab=MIT-1-ov-file">Licenza</a>
     </p>
     <p>
-      Sviluppato da Giovanni Genna · evoluzione di
-      <a href="https://github.com/claudiopizzillo/FeCscraper">FeCscraper</a>.
+      Sviluppato da Giovanni Genna · fork di
+      <a href="https://github.com/socrat3/FeCscraper">FeCscraper di socrat3</a>.
     </p>
   </footer>
 

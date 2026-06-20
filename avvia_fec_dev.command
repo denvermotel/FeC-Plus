@@ -1,11 +1,13 @@
 #!/bin/bash
-# Launcher macOS per la GUI FEC – Fatture e Corrispettivi.
-# Doppio click da Finder per avviare. Usa il virtualenv .venv se presente.
+# Launcher macOS — GUI FEC in modalità SVILUPPO (G.1): aggiunge la scheda Test Login,
+# la cattura HAR e i selettori backend/headless. Doppio click da Finder per avviare.
 cd "$(dirname "$0")" || exit 1
 
 echo
 cat assets/banner.txt
 echo
+
+export FEC_DEV=1
 
 if [ -x ".venv/bin/python" ]; then
     PY=".venv/bin/python"
@@ -13,8 +15,8 @@ else
     PY="python3"
 fi
 
-echo "Avvio FeC-Plus con: $PY"
-"$PY" fec_gui.py
+echo "Avvio FeC-Plus (DEV) con: $PY"
+"$PY" fec_gui.py --dev
 status=$?
 
 if [ $status -ne 0 ]; then

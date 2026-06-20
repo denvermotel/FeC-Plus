@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# FeC-Plus — v0.02 alpha
 """
 fec_download.py — Download fatture elettroniche dal portale AdE "Fatture e
 Corrispettivi", a partire da una sessione GIÀ autenticata.
@@ -30,7 +31,7 @@ Bolli virtuali (genera PDF F24):
 
 from __future__ import annotations
 
-__version__ = "0.01 alpha"
+__version__ = "0.02 alpha"
 
 import json
 import os
@@ -61,9 +62,18 @@ class DownloadResult:
 # Helper interni
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _cartella(dest_dir: str | None, prefisso: str, cf_cliente: str) -> str:
-    """Costruisce e crea la cartella di destinazione `<dest>/<prefisso>_<cf>`."""
+def _cartella(dest_dir: str | None, prefisso: str, cf_cliente: str,
+              sottocartella: bool = True) -> str:
+    """
+    Costruisce e crea la cartella di destinazione.
+
+    Con `sottocartella=True` (default) usa `<dest>/<prefisso>_<cf>`; con `False`
+    salva direttamente in `<dest>` (file senza sottocartella, utile per i gestionali).
+    """
     base = dest_dir or DEFAULT_DEST_DIR
+    if not sottocartella:
+        os.makedirs(base, exist_ok=True)
+        return base
     path = os.path.join(base, f"{prefisso}_{cf_cliente}")
     os.makedirs(path, exist_ok=True)
     return path
@@ -136,12 +146,13 @@ def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def scarica_emesse(auth: AuthResult, dal: str, al: str, cf_cliente: str,
-                   dest_dir: str | None = None, log=print) -> DownloadResult:
+                   dest_dir: str | None = None, sottocartella: bool = True,
+                   log=print) -> DownloadResult:
     """
     Scarica le fatture EMESSE nell'intervallo [dal, al] (formato ddmmyyyy).
     `auth` deve essere già autenticato (vedi `ade_auth.autentica`).
     """
-    cartella = _cartella(dest_dir, "FattureEmesse", cf_cliente)
+    cartella = _cartella(dest_dir, "FattureEmesse", cf_cliente, sottocartella)
     log(f"Scarico fatture emesse per {cf_cliente}  ({dal} -> {al})")
     url = f"{IVASERVIZI}/cons/cons-services/rs/fe/emesse/dal/{dal}/al/{al}?v={unix_time()}"
     n_fatture, n_metadati = _scarica_da_lista(auth, url, cartella, log)
@@ -154,13 +165,13 @@ def scarica_emesse(auth: AuthResult, dal: str, al: str, cf_cliente: str,
 
 def scarica_ricevute(auth: AuthResult, dal: str, al: str, cf_cliente: str,
                      tipo_data: int = 1, dest_dir: str | None = None,
-                     log=print) -> DownloadResult:
+                     sottocartella: bool = True, log=print) -> DownloadResult:
     """
     Scarica le fatture RICEVUTE nell'intervallo [dal, al] (formato ddmmyyyy).
     `tipo_data`: 1 = ricerca per data ricezione (default), 2 = per data emissione.
     `auth` deve essere già autenticato (vedi `ade_auth.autentica`).
     """
-    cartella = _cartella(dest_dir, "FattureRicevute", cf_cliente)
+    cartella = _cartella(dest_dir, "FattureRicevute", cf_cliente, sottocartella)
     ricerca = "ricezione" if tipo_data == 1 else "emissione"
     log(f"Scarico fatture ricevute per {cf_cliente}  ({dal} -> {al})  "
         f"ricerca per {ricerca}")
@@ -176,9 +187,10 @@ def scarica_ricevute(auth: AuthResult, dal: str, al: str, cf_cliente: str,
 
 def scarica_transfrontaliere_emesse(auth: AuthResult, dal: str, al: str,
                                     cf_cliente: str, dest_dir: str | None = None,
+                                    sottocartella: bool = True,
                                     log=print) -> DownloadResult:
     """Fatture transfrontaliere EMESSE nell'intervallo [dal, al] (ddmmyyyy)."""
-    cartella = _cartella(dest_dir, "FattureEmesseTRAN", cf_cliente)
+    cartella = _cartella(dest_dir, "FattureEmesseTRAN", cf_cliente, sottocartella)
     log(f"Scarico fatture transfrontaliere emesse per {cf_cliente}  ({dal} -> {al})")
     url = f"{IVASERVIZI}/cons/cons-services/rs/ft/emesse/dal/{dal}/al/{al}?v={unix_time()}"
     n_fatture, n_metadati = _scarica_da_lista(auth, url, cartella, log)
@@ -191,9 +203,10 @@ def scarica_transfrontaliere_emesse(auth: AuthResult, dal: str, al: str,
 
 def scarica_transfrontaliere_ricevute(auth: AuthResult, dal: str, al: str,
                                       cf_cliente: str, dest_dir: str | None = None,
+                                      sottocartella: bool = True,
                                       log=print) -> DownloadResult:
     """Fatture transfrontaliere RICEVUTE nell'intervallo [dal, al] (ddmmyyyy)."""
-    cartella = _cartella(dest_dir, "FattureRicevuteTRAN", cf_cliente)
+    cartella = _cartella(dest_dir, "FattureRicevuteTRAN", cf_cliente, sottocartella)
     log(f"Scarico fatture transfrontaliere ricevute per {cf_cliente}  ({dal} -> {al})")
     url = f"{IVASERVIZI}/cons/cons-services/rs/ft/ricevute/dal/{dal}/al/{al}?v={unix_time()}"
     n_fatture, n_metadati = _scarica_da_lista(auth, url, cartella, log)
@@ -206,9 +219,10 @@ def scarica_transfrontaliere_ricevute(auth: AuthResult, dal: str, al: str,
 
 def scarica_messe_a_disposizione(auth: AuthResult, dal: str, al: str,
                                  cf_cliente: str, dest_dir: str | None = None,
+                                 sottocartella: bool = True,
                                  log=print) -> DownloadResult:
     """Fatture ricevute "messe a disposizione" nell'intervallo [dal, al] (ddmmyyyy)."""
-    cartella = _cartella(dest_dir, "FattureRicevuteDisposizione", cf_cliente)
+    cartella = _cartella(dest_dir, "FattureRicevuteDisposizione", cf_cliente, sottocartella)
     log(f"Scarico fatture messe a disposizione per {cf_cliente}  ({dal} -> {al})")
     url = f"{IVASERVIZI}/cons/cons-services/rs/fe/mc/dal/{dal}/al/{al}?v={unix_time()}"
     n_fatture, n_metadati = _scarica_da_lista(auth, url, cartella, log)
@@ -302,15 +316,17 @@ def _xml_corrispettivi(piva: str, dal: str, al: str) -> str:
 """
 
 
-def _invia_xml(auth: AuthResult, sottocartella: str, nome_xml: str, xml_body: str,
+def _invia_xml(auth: AuthResult, nome_sottocartella: str, nome_xml: str, xml_body: str,
                tipo_richiesta: str, csv_suffix: str, cf_cliente: str,
-               dest_dir: str | None, log) -> str:
+               dest_dir: str | None, sottocartella: bool, log) -> str:
     """
-    Scrive `xml_body` in `<dest>/<sottocartella>/<nome_xml>`, lo carica su
+    Scrive `xml_body` (in `<dest>/<nome_sottocartella>/<nome_xml>`, o direttamente in
+    `<dest>` se `sottocartella=False`), lo carica su
     `/cons/mass-services/rs/file/upload?tipoRichiesta=<tipo>` e registra l'esito.
     Ritorna il codice di richiesta restituito dall'AdE. Solleva DownloadError su errore.
     """
-    cartella = os.path.join(dest_dir or DEFAULT_DEST_DIR, sottocartella)
+    base = dest_dir or DEFAULT_DEST_DIR
+    cartella = base if not sottocartella else os.path.join(base, nome_sottocartella)
     os.makedirs(cartella, exist_ok=True)
     percorso = os.path.join(cartella, nome_xml)
     with open(percorso, "w", encoding="utf-8") as f:
@@ -350,44 +366,46 @@ def _invia_xml(auth: AuthResult, sottocartella: str, nome_xml: str, xml_body: st
 
 def richiesta_massiva_emesse(auth: AuthResult, dal: str, al: str, cf_cliente: str,
                              piva: str, dest_dir: str | None = None,
-                             log=print) -> str:
+                             sottocartella: bool = True, log=print) -> str:
     """Richiesta massiva fatture EMESSE (per data emissione). Date AAAA-MM-GG."""
     _valida_intervallo_iso(dal, al)
     xml = _xml_massivo_fatture(piva, dal, al, "FattureEmesse", "DataEmissione", "CEDENTE")
     return _invia_xml(auth, "inviomassivo", f"FATT_{cf_cliente}.xml", xml,
-                      "FATT", "fattura_massiva", cf_cliente, dest_dir, log)
+                      "FATT", "fattura_massiva", cf_cliente, dest_dir, sottocartella, log)
 
 
 def richiesta_massiva_ricevute_emissione(auth: AuthResult, dal: str, al: str,
                                          cf_cliente: str, piva: str,
                                          dest_dir: str | None = None,
+                                         sottocartella: bool = True,
                                          log=print) -> str:
     """Richiesta massiva fatture RICEVUTE per data EMISSIONE. Date AAAA-MM-GG."""
     _valida_intervallo_iso(dal, al)
     xml = _xml_massivo_fatture(piva, dal, al, "FattureRicevute", "DataEmissione", "CESSIONARIO")
     return _invia_xml(auth, "inviomassivo", f"FATT_M_RICEVUTE_EMISSIONE{cf_cliente}.xml",
-                      xml, "FATT", "fattura_massiva", cf_cliente, dest_dir, log)
+                      xml, "FATT", "fattura_massiva", cf_cliente, dest_dir, sottocartella, log)
 
 
 def richiesta_massiva_ricevute_ricezione(auth: AuthResult, dal: str, al: str,
                                          cf_cliente: str, piva: str,
                                          dest_dir: str | None = None,
+                                         sottocartella: bool = True,
                                          log=print) -> str:
     """Richiesta massiva fatture RICEVUTE per data RICEZIONE. Date AAAA-MM-GG."""
     _valida_intervallo_iso(dal, al)
     xml = _xml_massivo_fatture(piva, dal, al, "FattureRicevute", "DataRicezione", "CESSIONARIO")
     return _invia_xml(auth, "inviomassivo", f"FATT_M_RICEVUTE_RICEZIONE{cf_cliente}.xml",
-                      xml, "FATT", "fattura_massiva", cf_cliente, dest_dir, log)
+                      xml, "FATT", "fattura_massiva", cf_cliente, dest_dir, sottocartella, log)
 
 
 def richiesta_corrispettivi(auth: AuthResult, dal: str, al: str, cf_cliente: str,
                             piva: str, dest_dir: str | None = None,
-                            log=print) -> str:
+                            sottocartella: bool = True, log=print) -> str:
     """Richiesta massiva CORRISPETTIVI (tipo RT). Date AAAA-MM-GG."""
     _valida_intervallo_iso(dal, al)
     xml = _xml_corrispettivi(piva, dal, al)
     return _invia_xml(auth, "inviocorrispettivi", f"COR_{cf_cliente}.xml", xml,
-                      "CORR", "corrispettivi", cf_cliente, dest_dir, log)
+                      "CORR", "corrispettivi", cf_cliente, dest_dir, sottocartella, log)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -395,7 +413,8 @@ def richiesta_corrispettivi(auth: AuthResult, dal: str, al: str, cf_cliente: str
 # ─────────────────────────────────────────────────────────────────────────────
 
 def scarica_bolli(auth: AuthResult, cf_cliente: str, piva: str, trimestre: str,
-                  anno: str, dest_dir: str | None = None, log=print) -> str | None:
+                  anno: str, dest_dir: str | None = None,
+                  sottocartella: bool = True, log=print) -> str | None:
     """
     Scarica i dati dei bolli virtuali per `trimestre`/`anno` e genera il PDF F24.
     Ritorna il percorso del PDF salvato, o None se non ci sono bolli.
@@ -427,7 +446,8 @@ def scarica_bolli(auth: AuthResult, cf_cliente: str, piva: str, trimestre: str,
         f"{IVASERVIZI}/cons/cons-services/rs/fe/bollo/dettaglio/{trimestre}{anno}{piva}?v={unix_time()}",
         headers=auth.headers, verify=False)
 
-    cartella = os.path.join(dest_dir or DEFAULT_DEST_DIR, f"F24_Bolli_{trimestre}{anno}")
+    base = dest_dir or DEFAULT_DEST_DIR
+    cartella = base if not sottocartella else os.path.join(base, f"F24_Bolli_{trimestre}{anno}")
     os.makedirs(cartella, exist_ok=True)
 
     headers_json = {**auth.headers, "Content-Type": "application/json"}
