@@ -140,3 +140,66 @@ def elenco_fatture_excel(auth: AuthResult, cf_cliente: str, piva: str, tipo: str
 
     # TODO (step 4-5 del piano C.9): dettaglio per fattura + pivot aliquote + xlsx.
     raise DownloadError("Export Excel in sviluppo: parser non ancora implementato.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Discovery (dev-only): dump dei JSON reali per confermare i nomi campo
+# ─────────────────────────────────────────────────────────────────────────────
+
+def dump_json_esempio(auth: AuthResult, tipo: str, dal: str, al: str,
+                      dest_dir: str = "_materiale", log=print) -> None:
+    """
+    Salva in `dest_dir` la lista fatture del PRIMO blocco del periodo e il dettaglio
+    della PRIMA fattura (`dump_lista_{tipo}.json` / `dump_dettaglio_{tipo}.json`).
+    Serve solo in sviluppo, per confermare i nomi dei campi JSON (la lista espone di
+    certo solo tipoInvio/idFattura; il resto va verificato sul vivo). ⚠️ I dump possono
+    contenere dati personali reali: tenerli in `_materiale/` (fuori da Git).
+    """
+    b_dal, b_al = spezza_periodo(dal, al, "%d%m%Y")[0]
+    voci = _lista_fatture(auth, tipo, b_dal, b_al)
+    os.makedirs(dest_dir, exist_ok=True)
+    percorso = os.path.join(dest_dir, f"dump_lista_{tipo}.json")
+    with open(percorso, "w", encoding="utf-8") as fh:
+        json.dump(voci, fh, indent=2, ensure_ascii=False)
+    log(f"Lista ({len(voci)} voci) salvata in {percorso}")
+    if not voci:
+        log("Nessuna fattura nel blocco: dettaglio non scaricabile.")
+        return
+    fattura_file = f"{voci[0].get('tipoInvio', '')}{voci[0].get('idFattura', '')}"
+    dettaglio = _dettaglio_fattura(auth, fattura_file)
+    percorso = os.path.join(dest_dir, f"dump_dettaglio_{tipo}.json")
+    with open(percorso, "w", encoding="utf-8") as fh:
+        json.dump(dettaglio, fh, indent=2, ensure_ascii=False)
+    log(f"Dettaglio fattura {fattura_file} salvato in {percorso}")
+
+
+if __name__ == "__main__":
+    # Uso dev:  python fec_utility.py --tipo emesse --dal 01012026 --al 31032026 \
+    #               --cf-cliente 12345678901 [--profilo 1] [--backend requests]
+    # Credenziali: cf/pin/cfstudio da fec_store (come la GUI); password da
+    # variabile d'ambiente FEC_PASSWORD o richiesta a video (mai salvata, C.3).
+    import argparse
+    import getpass
+
+    import ade_auth
+    import fec_store
+
+    ap = argparse.ArgumentParser(description="Dump JSON di discovery per l'export Excel (dev)")
+    ap.add_argument("--tipo", default="emesse", choices=sorted(TIPI_ELENCO))
+    ap.add_argument("--dal", required=True, help="data inizio GGMMAAAA")
+    ap.add_argument("--al", required=True, help="data fine GGMMAAAA")
+    ap.add_argument("--cf-cliente", required=True)
+    ap.add_argument("--profilo", type=int, default=1)
+    ap.add_argument("--backend", default="requests", choices=["requests", "browser"])
+    args = ap.parse_args()
+
+    cred = fec_store.load_credentials()
+    if not cred:
+        raise SystemExit("Nessuna credenziale salvata (fec_credentials.dat): "
+                         "salva le credenziali dalla GUI prima di usare il dump.")
+    password = os.environ.get("FEC_PASSWORD") or getpass.getpass("Password Entratel: ")
+    creds = ade_auth.Creds(nomeutente=cred.get("cf", ""), pin=cred.get("pin", ""),
+                           password=password, cfstudio=cred.get("cfstudio", ""),
+                           cf_cliente=args.cf_cliente, profilo=args.profilo)
+    auth = ade_auth.autentica(creds, backend=args.backend)
+    dump_json_esempio(auth, args.tipo, args.dal, args.al)
