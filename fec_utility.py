@@ -109,6 +109,167 @@ def _dettaglio_fattura(auth: AuthResult, fattura_file: str) -> dict | None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Parser difensivo (i nomi campo JSON dell'AdE vanno confermati col dump di
+# discovery: qui si prova una rosa di alias e si degrada a vuoto se assenti)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Colonne fisse dell'Excel (prima delle coppie pivot per aliquota).
+COLONNE_FISSE = ["Data", "N. Fattura", "ID SDI", "Tipo Documento",
+                 "Cliente/Fornitore", "Partita IVA"]
+COLONNE_TOTALI = ["Tot. Imponibile", "Tot. IVA", "Totale Fattura", "Bollo Virtuale"]
+
+# Tipi documento che rappresentano note di credito (importi da negare).
+_TIPI_NOTA_CREDITO = ("TD04", "TD08")
+
+
+def _campo(d: dict | None, *nomi: str, default=None):
+    """Primo valore non-None tra gli alias `nomi` (match case-insensitive sulle chiavi)."""
+    if not isinstance(d, dict):
+        return default
+    minuscole = {k.lower(): v for k, v in d.items()}
+    for nome in nomi:
+        val = minuscole.get(nome.lower())
+        if val is not None:
+            return val
+    return default
+
+
+def _importo(val) -> float:
+    """
+    Converte un importo AdE in float: gestisce numeri nativi, il formato grezzo
+    `+000000000012,00`, separatori italiani `1.234,56` e stringhe vuote → 0.0.
+    """
+    if val is None:
+        return 0.0
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).strip().replace("€", "").strip()
+    if not s:
+        return 0.0
+    segno = -1.0 if s.startswith("-") else 1.0
+    s = s.lstrip("+-")
+    if "," in s:                       # formato italiano: la virgola è il decimale
+        s = s.replace(".", "").replace(",", ".")
+    try:
+        return segno * float(s)
+    except ValueError:
+        return 0.0
+
+
+def _chiave_aliquota(riga_iva: dict) -> str | None:
+    """
+    Chiave pivot di una riga di riepilogo IVA: `"22%"` per le aliquote numeriche,
+    il codice natura (`"N2.1"`) per le operazioni senza imposta, None se indeterminabile.
+    """
+    aliquota = _campo(riga_iva, "aliquotaIVA", "aliquota", "aliquotaIva")
+    natura = _campo(riga_iva, "natura", "codiceNatura", "naturaOperazione")
+    if aliquota is not None and str(aliquota).strip():
+        n = _importo(aliquota)
+        if n > 0 or not natura:
+            return f"{n:g}%".replace(".", ",")     # 22.0 → "22%", 10.5 → "10,5%"
+    if natura and str(natura).strip():
+        return str(natura).strip().upper()
+    return None
+
+
+def _righe_riepilogo_iva(dettaglio: dict | None) -> list[dict]:
+    """
+    Trova nel JSON di dettaglio la lista delle righe di riepilogo IVA, senza conoscere
+    la chiave contenitore: cerca ricorsivamente la prima lista di dict che abbia sia
+    un campo imponibile sia un campo imposta/aliquota (struttura della tabella
+    «Riepiloghi» della pagina Dettaglio fattura del portale).
+    """
+    def _sembra_riepilogo(lst) -> bool:
+        return (isinstance(lst, list) and lst and isinstance(lst[0], dict)
+                and _campo(lst[0], "imponibile", "imponibileImporto") is not None
+                and (_campo(lst[0], "imposta", "aliquotaIVA", "aliquota",
+                            "aliquotaIva") is not None))
+
+    def _cerca(nodo):
+        if _sembra_riepilogo(nodo):
+            return nodo
+        if isinstance(nodo, dict):
+            for v in nodo.values():
+                trovato = _cerca(v)
+                if trovato is not None:
+                    return trovato
+        elif isinstance(nodo, list):
+            for v in nodo:
+                trovato = _cerca(v)
+                if trovato is not None:
+                    return trovato
+        return None
+
+    return _cerca(dettaglio) or []
+
+
+def _e_nota_credito(tipo_doc: str) -> bool:
+    t = (tipo_doc or "").upper()
+    return any(td in t for td in _TIPI_NOTA_CREDITO) or "NOTA DI CREDITO" in t
+
+
+def _estrai_riga(voce: dict, dettaglio: dict | None) -> dict:
+    """
+    Riga Excel per una fattura: unisce i campi della voce di lista con le righe di
+    riepilogo IVA del dettaglio. Ritorna un dict con le chiavi di COLONNE_FISSE,
+    più `iva` = {chiave_aliquota: [imponibile, imposta]} e i tre totali numerici.
+    Per le note di credito tutti gli importi sono negati.
+    """
+    intestazione = dettaglio if isinstance(dettaglio, dict) else {}
+    tipo_doc = str(_campo(voce, "tipoDocumento", "tipoDoc", "descTipoDocumento",
+                          default=_campo(intestazione, "tipoDocumento", "tipoDoc",
+                                         default="")) or "")
+    controparte = _campo(voce, "denominazione", "denominazioneCedente",
+                         "denominazioneCessionario", "cliente", "fornitore",
+                         "ragioneSociale", "nome", default="") or ""
+    riga = {
+        "Data": _campo(voce, "dataEmissione", "dataFattura", "data",
+                       "dataRicezione", default="") or "",
+        "N. Fattura": _campo(voce, "numeroFattura", "numero", "numFattura",
+                             default="") or "",
+        "ID SDI": _campo(voce, "idSdi", "idSDI", "identificativoSdi",
+                         "idFattura", default="") or "",
+        "Tipo Documento": tipo_doc,
+        "Cliente/Fornitore": str(controparte).strip(),
+        "Partita IVA": _campo(voce, "pivaCliente", "pivaFornitore", "partitaIva",
+                              "piva", "pivaCedente", "pivaCessionario",
+                              default="") or "",
+        "Bollo Virtuale": _campo(voce, "bolloVirtuale", "bollo", default="") or "",
+    }
+
+    segno = -1.0 if _e_nota_credito(tipo_doc) else 1.0
+    iva: dict[str, list[float]] = {}
+    tot_imp = tot_iva = 0.0
+    for riga_iva in _righe_riepilogo_iva(dettaglio):
+        chiave = _chiave_aliquota(riga_iva)
+        if chiave is None:
+            continue
+        imponibile = segno * _importo(_campo(riga_iva, "imponibile",
+                                             "imponibileImporto"))
+        imposta = segno * _importo(_campo(riga_iva, "imposta", "impostaImporto"))
+        coppia = iva.setdefault(chiave, [0.0, 0.0])
+        coppia[0] += imponibile
+        coppia[1] += imposta
+        tot_imp += imponibile
+        tot_iva += imposta
+
+    riga["iva"] = iva
+    riga["Tot. Imponibile"] = tot_imp
+    riga["Tot. IVA"] = tot_iva
+    riga["Totale Fattura"] = tot_imp + tot_iva
+    return riga
+
+
+def _ordina_chiavi_pivot(chiavi) -> list[str]:
+    """Aliquote numeriche crescenti prima ("4%", "10%", "22%"), poi nature alfabetiche."""
+    def _ordine(chiave: str):
+        if chiave.endswith("%"):
+            return (0, _importo(chiave[:-1]), "")
+        return (1, 0.0, chiave)
+    return sorted(chiavi, key=_ordine)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Funzione pubblica
 # ─────────────────────────────────────────────────────────────────────────────
 
