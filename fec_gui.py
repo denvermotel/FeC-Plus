@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# FeC-Plus — v0.02 alpha
+# FeC-Plus — v0.03 dev
 """
 FEC GUI — Fatture Elettroniche e Corrispettivi
 Interfaccia grafica per il download fatture e corrispettivi dal portale AdE.
@@ -17,20 +17,51 @@ import os
 import json
 import sys
 
-__version__ = "0.02 alpha"
+import fec_deps
+
+__version__ = "0.03 dev"
 
 APP_NAME = "FeC-Plus"
 REPO_URL = "https://github.com/denvermotel/FeC-Plus"
-LICENSE_URL = "https://github.com/denvermotel/FeC-Plus?tab=MIT-1-ov-file"
+LICENSE_URL = "https://raw.githubusercontent.com/denvermotel/FeC-Plus/refs/heads/master/LICENSE"
 DOCS_URL = "https://denvermotel.github.io/FeC-Plus/guida.html"
 HOME_URL = "https://denvermotel.github.io/FeC-Plus/"
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-ASSETS_DIR = os.path.join(SCRIPT_DIR, "assets")
+# Percorsi compatibili con l'eseguibile PyInstaller (G.9): i dati persistenti
+# (config, credenziali, Download) stanno ACCANTO all'exe; gli asset di sola
+# lettura vengono dal bundle (sys._MEIPASS). In esecuzione da sorgente: come prima.
+if getattr(sys, "frozen", False):
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.executable))
+    ASSETS_DIR = os.path.join(getattr(sys, "_MEIPASS", SCRIPT_DIR), "assets")
+else:
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+    ASSETS_DIR = os.path.join(SCRIPT_DIR, "assets")
 APP_ICON = os.path.join(ASSETS_DIR, "AppIcon1024.png")
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "fec_gui_config.json")
 DEFAULT_DEST_DIR = os.path.join(SCRIPT_DIR, "Download")
-PYTHON = sys.executable
+
+
+def _python_interprete() -> "str | None":
+    """
+    Interprete Python da usare per «Installa dipendenze» (pip / playwright install).
+
+    Da sorgente: è lo stesso Python che esegue la GUI (venv) → `sys.executable`.
+    Da app pacchettizzata (PyInstaller, `dist/FeC-Plus.exe`): `sys.executable` è
+    l'ESEGUIBILE dell'app, NON un interprete Python — lanciarlo con «-m pip» non
+    installa nulla (rilancia solo la GUI). In quel caso serve un Python di sistema:
+    si cerca «py» (launcher Windows), «python», «python3». None se non ce n'è.
+    """
+    if not getattr(sys, "frozen", False):
+        return sys.executable
+    import shutil
+    for cand in ("py", "python", "python3"):
+        trovato = shutil.which(cand)
+        if trovato:
+            return trovato
+    return None
+
+
+PYTHON = _python_interprete()
 
 # Modalità SVILUPPO (G.1): stessa codebase, due interfacce scelte dal launcher.
 #   - pubblica (default): solo gli strumenti d'uso (download, ecc.).
@@ -45,6 +76,7 @@ try:
     from tkcalendar import DateEntry
     _HAS_TKCAL = True
 except Exception:
+    DateEntry = None
     _HAS_TKCAL = False
 
 
@@ -80,6 +112,7 @@ DOC_CLASSI = [
     ("massive",            "Fatture massive"),
     ("corrispettivi",      "Corrispettivi"),
     ("bolli",              "Bolli virtuali"),
+    ("utility",            "Utility (elenchi Excel)"),
 ]
 
 # Mappa il «Tipo documento» della scheda Download Standard alla classe DOC_CLASSI,
@@ -98,14 +131,19 @@ class FecGui:
 
     def __init__(self, root: tk.Tk):
         self.root = root
+        self._fix_macos_paste()
+        self._fix_caret()
         _dev = "  ·  DEV" if DEV_MODE else ""
         self.root.title(f"{APP_NAME} – Fatture e Corrispettivi  ·  v{__version__}{_dev}")
         self._set_app_icon()
-        self.root.geometry("880x760")
-        self.root.minsize(780, 600)
+        self.root.geometry("880x1010")
+        self.root.minsize(780, 680)
         self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(1, weight=0)
-        self.root.rowconfigure(2, weight=1)
+        # riga 0 = credenziali, riga 1 = PanedWindow verticale (notebook + console).
+        # Il divisore tra le tab e la console «Output» è trascinabile dall'utente
+        # (spesso, con molte tab in dev, la console finiva fuori schermo): la posizione
+        # viene salvata/ripristinata dalle preferenze. Vedi _apply_sash / _persist_sash.
+        self.root.rowconfigure(1, weight=1)
 
         self.cf_var       = tk.StringVar()
         self.pin_var      = tk.StringVar()
@@ -115,10 +153,15 @@ class FecGui:
         self.backend_var  = tk.StringVar(value="browser")  # browser | requests
         self.headless_var = tk.BooleanVar(value=True)  # browser nascosto di default
         self.salva_cred_var = tk.BooleanVar(value=True)  # «non salvare credenziali» (G.3)
+        # Se True disabilita l'aggiornamento automatico dell'anagrafica deleghe da AdE
+        # durante il download (nessun recupero né popup). Vedi tab Deleghe.
+        self.deleghe_no_update_var = tk.BooleanVar(value=False)
 
         # Scheda Download Standard (creati qui per poterli popolare da _load_config)
         self.std_profilo = tk.StringVar(value=PROFILI[0])
         self.std_destdir = tk.StringVar(value=DEFAULT_DEST_DIR)
+        self.std_escludi_scartate = tk.BooleanVar(value=True)
+        self.std_estrai_p7m = tk.BooleanVar(value=False)
 
         # Cartelle per tipo di documento (popolate da _load_config): per ogni classe
         # path (override), «personalizza» e «senza sottocartella». Vuoto ⇒ usa std_destdir.
@@ -133,6 +176,7 @@ class FecGui:
 
         self.process: "subprocess.Popen | None" = None
         self.worker: "threading.Thread | None" = None
+        self.control = None   # fec_download.Controllo dell'operazione in corso (pausa/annulla)
 
         self._load_config()
         # GUI pubblica: nessun selettore backend → default fisso su «requests» (login
@@ -141,6 +185,7 @@ class FecGui:
         if not DEV_MODE:
             self.backend_var.set("requests")
         self._build_ui()
+        self._refresh_dep_banner()  # G.8: controllo dipendenze all'avvio (inline, non bloccante)
 
     def _set_app_icon(self):
         """Imposta l'icona della finestra (assets/AppIcon1024.png). Best-effort:
@@ -169,6 +214,12 @@ class FecGui:
         self.std_profilo.set(cfg.get("std_profilo", self.std_profilo.get()))
         self.std_destdir.set(cfg.get("std_destdir", DEFAULT_DEST_DIR) or DEFAULT_DEST_DIR)
         self.salva_cred_var.set(bool(cfg.get("salva_credenziali", True)))
+        self.deleghe_no_update_var.set(bool(cfg.get("deleghe_no_update", False)))
+        self.std_escludi_scartate.set(bool(cfg.get("std_escludi_scartate_pa", True)))
+        self.std_estrai_p7m.set(bool(cfg.get("std_estrai_p7m", False)))
+        # Posizione del divisore console/tab (px dal bordo alto del PanedWindow), o None.
+        val = cfg.get("console_sash", None)
+        self.console_sash = int(val) if isinstance(val, (int, float)) and val > 0 else None
 
         cartelle = cfg.get("cartelle_documenti", {}) or {}
         for key, vars_ in self.dirclassi.items():
@@ -204,6 +255,9 @@ class FecGui:
             "std_destdir":      self.std_destdir.get().strip(),
             "salva_credenziali": salva,
             "cartelle_documenti": cartelle,
+            "deleghe_no_update": bool(self.deleghe_no_update_var.get()),
+            "std_escludi_scartate_pa": bool(self.std_escludi_scartate.get()),
+            "std_estrai_p7m": bool(self.std_estrai_p7m.get()),
         })
         self._update_dest_info()
         if salva:
@@ -232,12 +286,117 @@ class FecGui:
         return base, not bool(vars_["senza_sotto"].get())
 
     def _install_deps(self):
-        packages = ["requests", "python-dateutil", "playwright"]
-        self._log("\nInstallazione dipendenze + browser Chromium per Playwright...\n")
-        self._run_sequence([
-            [PYTHON, "-m", "pip", "install", "--upgrade"] + packages,
-            [PYTHON, "-m", "playwright", "install", "chromium"],
-        ])
+        """Pulsante «Installa dipendenze» (G.8): fa scegliere se installare tutto (incluso
+        Playwright + Chromium) o solo il set leggero per il backend «requests»."""
+        # App pacchettizzata (PyInstaller) senza un Python di sistema: pip/playwright
+        # non sono installabili. Spieghiamo il perché invece di lanciare un comando muto.
+        if PYTHON is None:
+            messagebox.showwarning(
+                "Installazione non disponibile",
+                "Questa è la versione pacchettizzata (.exe) e non è stato trovato un "
+                "interprete Python di sistema.\n\n"
+                "Per installare Playwright/Chromium: installa Python 3 da python.org "
+                "(spuntando «Add python.exe to PATH»), riavvia l'app e riprova. In "
+                "alternativa usa la versione da sorgente.\n\n"
+                "Nota: il backend leggero «requests» funziona comunque senza Playwright.")
+            return
+        win = tk.Toplevel(self.root)
+        win.title("Installa dipendenze")
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.grab_set()
+
+        frm = ttk.Frame(win, padding=(20, 16))
+        frm.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(frm, text="Quali dipendenze vuoi installare?",
+                  font=("", 12, "bold")).pack(anchor="w", pady=(0, 8))
+        ttk.Label(
+            frm, justify="left", wraplength=440,
+            text="• «Installa tutto» include Playwright e il browser Chromium: necessario per il "
+                 "backend browser e per l'accesso SPID/CIE.\n"
+                 "• «Solo backend leggero» installa il minimo per l'accesso «requests» "
+                 "(niente Chromium): più veloce, sufficiente per studio → cliente.",
+        ).pack(anchor="w", pady=(0, 14))
+
+        def avvia(include_playwright: bool):
+            win.destroy()
+            modo = ("tutto (incluso Playwright + Chromium)" if include_playwright
+                    else "solo backend leggero «requests»")
+            self._log(f"\nInstallazione dipendenze: {modo}…\n")
+            self._run_sequence(
+                fec_deps.install_commands(include_playwright, python=PYTHON),
+                on_done=self._refresh_dep_banner,
+            )
+
+        ttk.Button(frm, text="Installa tutto (con Playwright)", width=30,
+                   command=lambda: avvia(True)).pack(fill=tk.X, pady=2)
+        ttk.Button(frm, text="Solo backend leggero (senza Playwright)", width=30,
+                   command=lambda: avvia(False)).pack(fill=tk.X, pady=2)
+        ttk.Button(frm, text="Annulla", width=12,
+                   command=win.destroy).pack(anchor="e", pady=(12, 0))
+        win.bind("<Escape>", lambda _e: win.destroy())
+        win.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_width()) // 2
+        y = self.root.winfo_rooty() + 80
+        win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+
+    def _uninstall_deps(self):
+        """Strumento DEV (G.8): disinstalla le dipendenze selezionate via `pip uninstall`.
+        Utile per testare il banner/controllo dipendenze. Solo in DEV_MODE."""
+        installate = fec_deps.installed_deps()
+        win = tk.Toplevel(self.root)
+        win.title("Disinstalla dipendenze (dev)")
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.grab_set()
+
+        frm = ttk.Frame(win, padding=(20, 16))
+        frm.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(frm, text="Disinstalla dipendenze (strumento di test)",
+                  font=("", 12, "bold")).pack(anchor="w", pady=(0, 2))
+        ttk.Label(
+            frm, justify="left", wraplength=440, foreground="#b9770e",
+            text="Seleziona i pacchetti da rimuovere con «pip uninstall». Serve per verificare "
+                 "il controllo dipendenze all'avvio; reinstallali poi con «Installa dipendenze».",
+        ).pack(anchor="w", pady=(0, 12))
+
+        if not installate:
+            ttk.Label(frm, text="Nessuna dipendenza nota risulta installata.").pack(anchor="w")
+            ttk.Button(frm, text="Chiudi", width=12, command=win.destroy).pack(anchor="e", pady=(12, 0))
+            return
+
+        ruoli = {"core": "richiesta", "browser": "opzionale", "gui": "opzionale", "p7m": "opzionale"}
+        sel = {}
+        for dep in installate:
+            var = tk.BooleanVar(value=False)
+            sel[dep.pip] = var
+            ttk.Checkbutton(
+                frm, variable=var,
+                text=f"{dep.pip}   ({ruoli.get(dep.role, dep.role)})",
+            ).pack(anchor="w")
+
+        def disinstalla():
+            scelti = [pip for pip, var in sel.items() if var.get()]
+            if not scelti:
+                messagebox.showinfo("Nessuna selezione", "Seleziona almeno una dipendenza.", parent=win)
+                return
+            win.destroy()
+            self._log(f"\nDisinstallazione dipendenze: {', '.join(scelti)}…\n")
+            self._run_sequence(
+                fec_deps.uninstall_command(scelti, python=PYTHON),
+                on_done=self._refresh_dep_banner,
+            )
+
+        btns = ttk.Frame(frm)
+        btns.pack(fill=tk.X, pady=(14, 0))
+        ttk.Button(btns, text="Disinstalla selezionate", width=24,
+                   command=disinstalla).pack(side=tk.LEFT)
+        ttk.Button(btns, text="Annulla", width=12, command=win.destroy).pack(side=tk.RIGHT)
+        win.bind("<Escape>", lambda _e: win.destroy())
+        win.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_width()) // 2
+        y = self.root.winfo_rooty() + 80
+        win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
 
     def _show_about(self):
         """Finestra 'Informazioni' con versione e link a repository e licenza."""
@@ -283,10 +442,69 @@ class FecGui:
 
     # ── UI skeleton ───────────────────────────────────────────────────────────
 
+    def _fix_macos_paste(self):
+        """
+        macOS/Tk: con Cmd+V il testo viene incollato DUE volte (su Aqua partono due
+        percorsi di paste: il `<<Paste>>` virtuale E il binding di classe `<Command-v>`
+        del paste integrato) → dato raddoppiato.
+
+        Fix: intercettiamo ENTRAMBI gli eventi con un unico handler che (a) incolla una
+        sola volta e (b) ha un debounce che ignora un secondo paste ravvicinato sullo
+        stesso campo, qualunque percorso lo abbia generato; restituisce sempre "break"
+        per fermare il paste di default. Solo su macOS; altrove comportamento standard.
+        """
+        if sys.platform != "darwin":
+            return
+
+        import time
+        ultimo = {}   # path-widget -> istante ultimo paste (debounce anti-doppio)
+
+        def _paste(event):
+            w = event.widget
+            key = str(w)
+            now = time.monotonic()
+            if now - ultimo.get(key, 0.0) < 0.15:
+                return "break"                    # secondo paste ravvicinato = duplicato Aqua
+            ultimo[key] = now
+            try:                                  # sostituisci l'eventuale selezione
+                w.delete("sel.first", "sel.last")
+            except tk.TclError:
+                pass
+            try:
+                w.insert("insert", w.clipboard_get())
+            except tk.TclError:
+                pass
+            return "break"
+
+        for cls in ("Entry", "TEntry", "Text"):
+            for seq in ("<<Paste>>", "<Command-v>", "<Command-V>"):
+                self.root.bind_class(cls, seq, _paste)
+
+    def _fix_caret(self):
+        """
+        Rende visibile il caret (cursore di inserimento lampeggiante) nei campi: con il
+        tema `clam` (usato come fallback su macOS/Linux, dato che il loop temi in main()
+        sceglie clam quando i temi Windows non ci sono) l'`insertcolor` di default è VUOTO
+        → il cursore risulta invisibile. Lo impostiamo a un colore scuro e leggermente più
+        spesso, su tutte le classi di campo testuale.
+        """
+        style = ttk.Style(self.root)
+        for cls in ("TEntry", "TCombobox", "DateEntry"):
+            try:
+                style.configure(cls, insertcolor="#1e1e1e", insertwidth=2)
+            except tk.TclError:
+                pass
+
     def _build_ui(self):
         self._build_credentials()
+        # Contenitore verticale ridimensionabile: notebook (in alto) + console (in basso),
+        # con divisore trascinabile dall'utente. Sostituisce le due righe fisse di grid.
+        self.main_paned = ttk.PanedWindow(self.root, orient="vertical")
+        self.main_paned.grid(row=1, column=0, sticky="nsew", padx=12, pady=4)
         self._build_notebook()
         self._build_console()
+        self.main_paned.bind("<ButtonRelease-1>", lambda _e: self._persist_sash())
+        self.root.after(180, self._apply_sash)  # posiziona il divisore a layout pronto
 
     def _build_credentials(self):
         frame = ttk.LabelFrame(self.root, text=" Credenziali Entratel ", padding=(10, 6))
@@ -302,8 +520,8 @@ class FecGui:
         ]
         for idx, (lbl, var, secret) in enumerate(fields):
             ttk.Label(frame, text=lbl).grid(row=0, column=idx * 2,     sticky="w", padx=(4, 2))
-            kw = {"show": "●"} if secret else {}
-            ttk.Entry(frame, textvariable=var, width=16, **kw).grid(
+            ttk.Entry(frame, textvariable=var, width=16,
+                      show="●" if secret else "").grid(
                 row=0, column=idx * 2 + 1, sticky="ew", padx=(0, 8))
 
         btn_frame = ttk.Frame(frame)
@@ -311,12 +529,48 @@ class FecGui:
         ttk.Button(btn_frame, text="Salva credenziali",   command=self._save_config,   width=18).pack(pady=(0, 2))
         ttk.Button(btn_frame, text="⚙  Impostazioni",      command=self._show_settings, width=18).pack(pady=(0, 2))
         ttk.Button(btn_frame, text="Installa dipendenze", command=self._install_deps,  width=18).pack(pady=(0, 2))
+        if DEV_MODE:  # strumento diagnostico per testare il controllo dipendenze (G.8)
+            ttk.Button(btn_frame, text="Disinstalla dipendenze", command=self._uninstall_deps, width=18).pack(pady=(0, 2))
         ttk.Button(btn_frame, text="ℹ  Informazioni",     command=self._show_about,    width=18).pack()
 
         ttk.Checkbutton(
             frame, text="Non salvare le credenziali su questo computer",
             variable=self.salva_cred_var, onvalue=False, offvalue=True,
         ).grid(row=1, column=0, columnspan=8, sticky="w", padx=(4, 0), pady=(4, 0))
+
+        # Banner dipendenze (G.8): avviso inline non bloccante, popolato da
+        # _refresh_dep_banner(); resta nascosto (grid_remove) se non manca nulla.
+        self.dep_banner = ttk.Label(frame, wraplength=720, justify="left")
+        self.dep_banner.grid(row=2, column=0, columnspan=9, sticky="w", padx=(4, 0), pady=(6, 0))
+        self.dep_banner.grid_remove()
+
+    def _refresh_dep_banner(self):
+        """Controllo dipendenze all'avvio (G.8): mostra inline le dipendenze mancanti.
+
+        Convenzione UI avvisi (G.2): avviso inline, mai messagebox. Le mancanze «core»
+        sono gravi (rosse), Playwright e tkcalendar sono opzionali (note arancio/grigio).
+        """
+        missing = fec_deps.find_missing()
+        righe = []
+        colore = "#777777"
+        if missing["core"]:
+            colore = "#c0392b"
+            righe.append("⚠ Dipendenze richieste mancanti: "
+                         + ", ".join(missing["core"])
+                         + "  → usa «Installa dipendenze».")
+        if missing["browser"]:
+            if not missing["core"]:
+                colore = "#b9770e"
+            righe.append("• Playwright assente: disponibile solo il backend leggero «requests» "
+                         "(niente backend browser / SPID-CIE).")
+        if missing["gui"]:
+            righe.append("• tkcalendar assente: il calendario è in modalità testo.")
+
+        if righe:
+            self.dep_banner.configure(text="\n".join(righe), foreground=colore)
+            self.dep_banner.grid()
+        else:
+            self.dep_banner.grid_remove()
 
     def _show_settings(self):
         """Form preferenze (G.3): cartella download, profilo di default, salvataggio credenziali."""
@@ -422,22 +676,28 @@ class FecGui:
             v["path"].set(scelta)
 
     def _build_notebook(self):
-        nb = ttk.Notebook(self.root)
-        nb.grid(row=1, column=0, sticky="nsew", padx=12, pady=4)
+        nb = ttk.Notebook(self.main_paned)
+        self.main_paned.add(nb, weight=3)
 
         if DEV_MODE:
             self._tab_test_login(nb)
         self._tab_standard(nb)
-        self._tab_massive(nb)
-        self._tab_bolli(nb)
-        self._tab_corrispettivi(nb)
+        # Anagrafica deleghe (C.6.1): feature indipendente dall'AdE, sempre visibile.
+        self._tab_deleghe(nb)
+        # Tab ancora non testate/funzionanti: visibili solo in modalità sviluppo
+        # (avvia_fec_dev.bat). Nella GUI pubblica si mostra solo «Download Standard».
+        if DEV_MODE:
+            self._tab_richiesta_massiva(nb)
+            self._tab_bolli(nb)
+            self._tab_utility(nb)
 
     def _build_console(self):
-        frame = ttk.LabelFrame(self.root, text=" Output ", padding=(6, 4))
-        frame.grid(row=2, column=0, sticky="nsew", padx=12, pady=(4, 10))
+        frame = ttk.LabelFrame(self.main_paned, text=" Output ", padding=(6, 4))
+        self.main_paned.add(frame, weight=1)
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(0, weight=1)
-        self.root.rowconfigure(2, weight=1)
+        # La console vive nel PanedWindow: la sua altezza è data dal divisore trascinabile
+        # (posizione iniziale/ripristino gestiti da _apply_sash).
 
         self.console = scrolledtext.ScrolledText(
             frame, height=12, state="disabled",
@@ -450,6 +710,44 @@ class FecGui:
         btn_row.grid(row=1, column=0, sticky="e", pady=(4, 0))
         ttk.Button(btn_row, text="Pulisci",    command=self._clear_console, width=10).pack(side=tk.RIGHT, padx=3)
         ttk.Button(btn_row, text="Interrompi", command=self._stop_process,  width=10).pack(side=tk.RIGHT, padx=3)
+        self.pausa_btn = ttk.Button(btn_row, text="⏸ Pausa", command=self._toggle_pausa, width=10)
+        self.pausa_btn.pack(side=tk.RIGHT, padx=3)
+
+    # ── Divisore console/tab ridimensionabile ─────────────────────────────────
+
+    def _apply_sash(self):
+        """Posiziona il divisore all'avvio: valore salvato o, in mancanza, ~58%
+        dell'altezza (console ben visibile). Best-effort; riprova se il layout non
+        è ancora dimensionato."""
+        try:
+            self.main_paned.update_idletasks()
+            h = self.main_paned.winfo_height()
+            if h <= 1:
+                self.root.after(150, self._apply_sash)
+                return
+            pos = self.console_sash if (self.console_sash and 0 < self.console_sash < h) \
+                else int(h * 0.58)
+            self.main_paned.sashpos(0, pos)
+        except Exception:
+            pass
+
+    def _persist_sash(self):
+        """Salva la posizione del divisore nelle preferenze, senza toccare le
+        credenziali (merge sul file settings esistente)."""
+        try:
+            pos = int(self.main_paned.sashpos(0))
+        except Exception:
+            return
+        if pos <= 0:
+            return
+        self.console_sash = pos
+        try:
+            import fec_store
+            cfg = fec_store.load_settings()
+            cfg["console_sash"] = pos
+            fec_store.save_settings(cfg)
+        except Exception:
+            pass
 
     # ── Console helpers ───────────────────────────────────────────────────────
 
@@ -465,18 +763,48 @@ class FecGui:
         self.console.configure(state="disabled")
 
     def _stop_process(self):
+        agito = False
+        # Download/operazione in-process: annullamento cooperativo (effettivo al
+        # prossimo file, o quando la richiesta HTTP in corso ritorna/va in timeout).
+        if self.control is not None and self.worker and self.worker.is_alive():
+            self.control.annulla()
+            agito = True
+        # Subprocess (installazione dipendenze pip/playwright).
         if self.process and self.process.poll() is None:
             self.process.terminate()
-            self._log("\n[INTERROTTO dall'utente]\n")
+            agito = True
+        if agito:
+            self._log("\n[INTERRUZIONE richiesta dall'utente — termino appena possibile…]\n")
+
+    def _toggle_pausa(self):
+        """Mette in pausa / riprende lo scaricamento dei file (tra un file e l'altro)."""
+        if self.control is None or not (self.worker and self.worker.is_alive()):
+            return
+        if self.control.in_pausa():
+            self.control.riprendi()
+            self.pausa_btn.configure(text="⏸ Pausa")
+            self._log("\n[Ripreso]\n")
+        else:
+            self.control.pausa()
+            self.pausa_btn.configure(text="▶ Riprendi")
+            self._log("\n[In pausa — riprendo al prossimo file]\n")
+
+    def _reset_pausa_btn(self):
+        self.pausa_btn.configure(text="⏸ Pausa")
 
     # ── Process runner ────────────────────────────────────────────────────────
 
-    def _run_sequence(self, commands: list):
+    def _run_sequence(self, commands: list, on_done=None):
         """Esegue più comandi in sequenza nello stesso thread, fermandosi al primo errore.
-        Usato solo dall'installazione dipendenze (pip / playwright)."""
+        Usato solo dall'installazione dipendenze (pip / playwright). `on_done`, se passato,
+        viene richiamato nel thread Tk al termine (anche in caso di errore)."""
         if self.process and self.process.poll() is None:
             messagebox.showwarning("In esecuzione", "Un processo è già in esecuzione.")
             return
+
+        def _finish():
+            if on_done is not None:
+                self.root.after(0, on_done)
 
         def _target():
             for args in commands:
@@ -486,17 +814,21 @@ class FecGui:
                         args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                         text=True, encoding="utf-8", errors="replace", cwd=SCRIPT_DIR,
                     )
-                    for line in self.process.stdout:
-                        self.root.after(0, self._log, line)
+                    if self.process.stdout is not None:
+                        for line in self.process.stdout:
+                            self.root.after(0, self._log, line)
                     self.process.wait()
                     if self.process.returncode != 0:
                         self.root.after(0, self._log,
                                         f"\n[Interrotto – codice {self.process.returncode}]\n")
+                        _finish()
                         return
                 except Exception as exc:
                     self.root.after(0, self._log, f"\n[ERRORE] {exc}\n")
+                    _finish()
                     return
             self.root.after(0, self._log, "\n[Completato]\n")
+            _finish()
 
         threading.Thread(target=_target, daemon=True).start()
 
@@ -514,15 +846,23 @@ class FecGui:
                 fn(log)
             except Exception as exc:
                 log(f"\n❌ {exc}")
+            finally:
+                self.root.after(0, self._on_worker_done)
 
         self.worker = threading.Thread(target=_target, daemon=True)
         self.worker.start()
 
+    def _on_worker_done(self):
+        """Ripristina lo stato dei controlli al termine dell'operazione in-process."""
+        self.control = None
+        self._reset_pausa_btn()
+
     def _esegui_in_process(self, cfcl, piva, profilo_str, descrizione, operazione):
         """
         Autentica UNA volta in-process (backend/headless dalla scheda Test Login)
-        e poi esegue `operazione(res, log, fec_download)` sull'AuthResult.
-        `operazione` deve chiamare la funzione opportuna di fec_download.
+        e poi esegue `operazione(res, log, fec_queue)` sull'AuthResult.
+        `operazione` deve chiamare `fec_queue.esegui_richiesta(...)`, che orchestra
+        lo spezzettamento periodi (C.5) sopra fec_download.
         Tutto gira in un worker thread, con log instradato nella console.
         """
         cf, pin, pwd, cfst = self._get_creds()
@@ -530,21 +870,46 @@ class FecGui:
         backend  = self.backend_var.get()
         headless = bool(self.headless_var.get())
 
+        # Controllo pausa/annulla per QUESTA operazione (creato sul thread Tk così i
+        # pulsanti Pausa/Interrompi lo vedono subito).
+        import fec_download
+        self.control = fec_download.Controllo()
+        self._reset_pausa_btn()
+        control = self.control
+
         def task(log):
             from ade_auth import autentica, Creds, AuthError
             import fec_download
+            import fec_queue
 
             log(f"\n{'─' * 60}\n▶  {descrizione} (in-process, backend: {backend})\n{'─' * 60}")
             creds = Creds(nomeutente=cf, pin=pin, password=pwd, cfstudio=cfst,
                           cf_cliente=cfcl, piva=piva, profilo=profilo)
             try:
-                res = autentica(creds, backend=backend, headless=headless, log=log)
+                # Se la P.IVA non è indicata e il CF ne ha più d'una, il popup di
+                # scelta viene mostrato (solo backend requests; browser: ignorato).
+                res = autentica(creds, backend=backend, headless=headless, log=log,
+                                scegli_piva=self._chiedi_piva_thread)
             except AuthError as exc:
                 log(f"\n❌ Login fallito allo step «{exc.step}»: {exc.dettaglio}")
                 return
-            log(f"\n✅ Login OK — backend {res.backend}. Avvio operazione…")
+            msg_piva = f", P.IVA {res.piva}" if res.piva else ""
+            log(f"\n✅ Login OK — backend {res.backend}{msg_piva}. Avvio operazione…")
+
+            # Arricchimento anagrafica deleghe da AdE (salvo spunta «non aggiornare»).
+            if cfcl and not self.deleghe_no_update_var.get():
+                try:
+                    import fec_anagrafica
+                    dati = fec_anagrafica.recupera(res, log=log)
+                    self._applica_aggiornamento_delega(cfcl, dati, log)
+                except Exception as exc:  # noqa: BLE001 — non deve bloccare il download
+                    log(f"⚠️  Aggiornamento anagrafica non riuscito: {exc}")
+
             try:
-                operazione(res, log, fec_download)
+                operazione(res, log, fec_queue, control)
+            except fec_download.DownloadAnnullato as exc:
+                log(f"\n⏹  {exc}")
+                return
             except fec_download.DownloadError as exc:
                 log(f"\n❌ Operazione non riuscita: {exc}")
                 return
@@ -563,8 +928,7 @@ class FecGui:
     @staticmethod
     def _row(frame, row: int, label: str, var: tk.StringVar, width: int = 22, show: str = "") -> ttk.Entry:
         ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=4, padx=(0, 8))
-        kw = {"show": show} if show else {}
-        entry = ttk.Entry(frame, textvariable=var, width=width, **kw)
+        entry = ttk.Entry(frame, textvariable=var, width=width, show=show)
         entry.grid(row=row, column=1, sticky="w")
         return entry
 
@@ -621,7 +985,7 @@ class FecGui:
         `on_user_change` (se passato) viene invocato SOLO quando l'utente modifica la data
         a mano (calendario/tastiera), NON quando la data è impostata da codice (`set_date`).
         """
-        if _HAS_TKCAL:
+        if DateEntry is not None:
             from datetime import date
             w = DateEntry(frame, width=14, locale="it_IT", date_pattern="dd/mm/yyyy",
                           showweeknumbers=False, maxdate=date.today())  # niente date future
@@ -679,8 +1043,9 @@ class FecGui:
         pframe = ttk.Frame(frame)
         pframe.grid(row=row, column=1, sticky="w")
         vcmd = (frame.register(lambda P: P == "" or (P.isdigit() and len(P) <= 4)), "%P")
-        anno_entry = ttk.Entry(pframe, textvariable=anno_var, width=6,
-                               validate="key", validatecommand=vcmd)
+        anno_entry = ttk.Spinbox(pframe, textvariable=anno_var, width=6,
+                                 from_=2000, to=2100, validate="key",
+                                 validatecommand=vcmd, command=lambda: _apply())
         anno_entry.pack(side=tk.LEFT)
         cb = ttk.Combobox(pframe, textvariable=period_var, state="readonly",
                           width=16, values=[p[0] for p in periodi])
@@ -857,11 +1222,15 @@ class FecGui:
             creds = Creds(nomeutente=cf, pin=pin, password=pwd, cfstudio=cfst,
                           cf_cliente=cfcl, piva=piva, profilo=profilo)
             try:
-                res = autentica(creds, backend=backend, headless=headless, log=log)
+                # Multi-P.IVA: se non indichi una P.IVA e il login è headless, compare
+                # il popup di scelta (col browser visibile la scegli nella tendina).
+                res = autentica(creds, backend=backend, headless=headless, log=log,
+                                scegli_piva=self._chiedi_piva_thread)
             except AuthError as exc:
                 log(f"\n❌ Login fallito allo step «{exc.step}»: {exc.dettaglio}")
                 return
-            log(f"\n✅ Login OK — backend {res.backend}, token ottenuti "
+            msg_piva = f", P.IVA attivata {res.piva}" if res.piva else ""
+            log(f"\n✅ Login OK — backend {res.backend}{msg_piva}, token ottenuti "
                 f"(x-b2bcookie/{len(res.xb2bcookie)} char, x-token/{len(res.xtoken)} char).")
             # Conferma collegamento: GET autenticata innocua (endpoint verificato 200).
             from ade_auth import IVASERVIZI
@@ -878,13 +1247,575 @@ class FecGui:
 
         self._run_inprocess(task)
 
+    # ── Scelta P.IVA (popup) — condivisa da Test Login, Download Standard e wizard ──
+
+    def _chiedi_piva_thread(self, disponibili: list) -> str:
+        """
+        Callback `scegli_piva` per ade_auth: viene invocata DAL worker thread durante il
+        login, ma Tk non è thread-safe → il dialog di scelta va costruito sul thread
+        principale. Si pianifica il dialog con `after(0, …)` e si attende la risposta con
+        un Event. Ritorna la P.IVA scelta (o '' se annullato → ade_auth userà la prima).
+        """
+        import threading
+        evt = threading.Event()
+        box = {"piva": ""}
+
+        def _ask():
+            try:
+                box["piva"] = self._dialog_scelta_piva(disponibili)
+            finally:
+                evt.set()
+
+        self.root.after(0, _ask)
+        evt.wait()
+        return box["piva"]
+
+    def _dialog_scelta_piva(self, disponibili: list) -> str:
+        """Dialog modale di scelta P.IVA (una radio per P.IVA del CF). Solo thread Tk."""
+        win = tk.Toplevel(self.root)
+        win.title("Scelta partita IVA")
+        win.transient(self.root)
+        win.grab_set()
+        win.resizable(False, False)
+
+        frm = ttk.Frame(win, padding=(20, 16))
+        frm.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(frm, text="Il codice fiscale ha più partite IVA associate: "
+                             "scegli quella da usare.",
+                  wraplength=440, justify="left").pack(anchor="w", pady=(0, 10))
+
+        prima = str((disponibili[0] or {}).get("piva", "")).strip() if disponibili else ""
+        scelta = tk.StringVar(value=prima)
+        for p in disponibili:
+            piva = str((p or {}).get("piva", "")).strip()
+            denom = str((p or {}).get("denominazione", "")).strip()
+            ttk.Radiobutton(frm, variable=scelta, value=piva,
+                            text=f"{piva}   {denom}").pack(anchor="w")
+
+        out = {"piva": prima}
+
+        def conferma():
+            out["piva"] = scelta.get()
+            win.destroy()
+
+        ttk.Button(frm, text="Conferma", command=conferma, width=14).pack(anchor="e", pady=(12, 0))
+        win.bind("<Return>", lambda _e: conferma())
+        win.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_width()) // 2
+        y = self.root.winfo_rooty() + 120
+        win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        win.wait_window()
+        return out["piva"]
+
     # ─────────────────────────────────────────────────────────────────────────
     # TAB 1 – Download Standard
     # ─────────────────────────────────────────────────────────────────────────
 
+    # ── Scheda «Deleghe» — anagrafica locale (C.6.1) ───────────────────────────
+
+    # Etichette delle colonne mostrate nel Treeview (ordine = fec_deleghe.FIELDS).
+    _DELEGHE_COLS = (
+        ("denominazione", "Denominazione", 200),
+        ("codice_fiscale", "Codice fiscale", 130),
+        ("partita_iva", "Partita IVA", 110),
+        ("data_fine_delega", "Fine delega", 90),
+        ("conservazione", "Conserv.", 70),
+        ("codice_destinatario", "Cod. dest.", 80),
+    )
+
+    def _tab_deleghe(self, nb: ttk.Notebook):
+        import fec_deleghe
+        self._deleghe = fec_deleghe
+        self.deleghe_rows = fec_deleghe.load_deleghe()
+
+        tab = ttk.Frame(nb)
+        nb.add(tab, text="  Deleghe  ")
+        f = self._lf(tab)
+        f.columnconfigure(0, weight=1)
+        f.rowconfigure(0, weight=1)
+
+        # ── Tabella ──
+        tree_box = ttk.Frame(f)
+        tree_box.grid(row=0, column=0, sticky="nsew")
+        tree_box.columnconfigure(0, weight=1)
+        tree_box.rowconfigure(0, weight=1)
+
+        cols = [c[0] for c in self._DELEGHE_COLS]
+        self.deleghe_tree = ttk.Treeview(tree_box, columns=cols, show="headings", height=12)
+        for key, label, width in self._DELEGHE_COLS:
+            self.deleghe_tree.heading(key, text=label,
+                                      command=lambda k=key: self._deleghe_sort(k))
+            anchor = "center" if key in ("data_fine_delega", "conservazione") else "w"
+            self.deleghe_tree.column(key, width=width, anchor=anchor)
+        self.deleghe_tree.grid(row=0, column=0, sticky="nsew")
+        vsb = ttk.Scrollbar(tree_box, orient="vertical", command=self.deleghe_tree.yview)
+        vsb.grid(row=0, column=1, sticky="ns")
+        self.deleghe_tree.configure(yscrollcommand=vsb.set)
+        self.deleghe_tree.bind("<<TreeviewSelect>>", self._deleghe_on_select)
+
+        # ── Form ──
+        form = ttk.LabelFrame(f, text=" Riga ", padding=(12, 8))
+        form.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        self.dlg_denom = tk.StringVar()
+        self.dlg_cf    = tk.StringVar()
+        self.dlg_piva  = tk.StringVar()
+        self.dlg_fine  = tk.StringVar()
+        self.dlg_dest  = tk.StringVar()
+        self.dlg_cons  = tk.BooleanVar(value=False)
+        r = 0
+        self._row(form, r, "Denominazione:", self.dlg_denom, width=34)
+        r += 1; self._row(form, r, "Codice fiscale:", self.dlg_cf)
+        r += 1; self._row(form, r, "Partita IVA:", self.dlg_piva)
+        r += 1; self._row(form, r, "Data fine delega:", self.dlg_fine)
+        r += 1; self._row(form, r, "Codice destinatario:", self.dlg_dest)
+        r += 1
+        ttk.Label(form, text="Conservazione:").grid(row=r, column=0, sticky="w", pady=4, padx=(0, 8))
+        ttk.Checkbutton(form, variable=self.dlg_cons).grid(row=r, column=1, sticky="w")
+
+        # ── Bottoni ──
+        bar = ttk.Frame(f)
+        bar.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        ttk.Button(bar, text="Aggiungi / Salva", command=self._deleghe_save).pack(side=tk.LEFT)
+        ttk.Button(bar, text="Pulisci form", command=self._deleghe_clear_form).pack(side=tk.LEFT, padx=6)
+        ttk.Button(bar, text="Elimina", command=self._deleghe_delete).pack(side=tk.LEFT, padx=6)
+        ttk.Button(bar, text="↻ Aggiorna da AdE",
+                   command=self._deleghe_aggiorna_da_ade).pack(side=tk.LEFT, padx=(18, 6))
+        ttk.Button(bar, text="↻↻ Aggiorna tutte",
+                   command=self._deleghe_aggiorna_tutte).pack(side=tk.LEFT, padx=6)
+        ttk.Button(bar, text="▶ Usa per download", command=self._deleghe_use).pack(side=tk.LEFT, padx=6)
+
+        bar2 = ttk.Frame(f)
+        bar2.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        ttk.Button(bar2, text="Importa da CSV AdE…", command=self._deleghe_import_ade).pack(side=tk.LEFT)
+        ttk.Button(bar2, text="Importa CSV app…", command=self._deleghe_import_app).pack(side=tk.LEFT, padx=6)
+        ttk.Button(bar2, text="Esporta CSV app…", command=self._deleghe_export_app).pack(side=tk.LEFT, padx=6)
+
+        ttk.Checkbutton(
+            f, text="Non aggiornare l'anagrafica dai dati AdE durante il download",
+            variable=self.deleghe_no_update_var, command=self._persist_deleghe_flag,
+        ).grid(row=4, column=0, sticky="w", pady=(10, 0))
+
+        self._note(f, 5, "«Aggiorna da AdE»: fa login sul CF selezionato (o del form) e ricava da "
+                         "AdE denominazione, P.IVA, conservazione e codice destinatario, "
+                         "proponendo i campi variati; «Aggiorna tutte» lo fa su tutte le deleghe con "
+                         "un solo accesso. Lo stesso avviene in automatico al download, salvo la "
+                         "spunta qui sopra. L'import dal CSV AdE «Elenco deleganti» riempie solo CF "
+                         "e data fine delega: la conservazione si legge solo dal portale (i tasti "
+                         "«Aggiorna…»). «Usa per download» precompila la scheda Download Standard.")
+        self._deleghe_refresh()
+
+    def _no_update_check(self, frame, row: int) -> int:
+        """Checkbox condivisa «non aggiornare l'anagrafica da AdE» (stessa variabile in
+        tutte le schede: modificarla in una si riflette ovunque). Ritorna la riga dopo."""
+        ttk.Checkbutton(
+            frame, text="Non aggiornare l'anagrafica deleghe dai dati AdE",
+            variable=self.deleghe_no_update_var, command=self._persist_deleghe_flag,
+        ).grid(row=row, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        return row + 1
+
+    def _persist_deleghe_flag(self):
+        """Salva la spunta «non aggiornare» nelle preferenze (merge, senza credenziali)."""
+        try:
+            import fec_store
+            cfg = fec_store.load_settings()
+            cfg["deleghe_no_update"] = bool(self.deleghe_no_update_var.get())
+            fec_store.save_settings(cfg)
+        except Exception:
+            pass
+
+    def _deleghe_aggiorna_da_ade(self):
+        """Login sul CF selezionato (o del form) e aggiorna l'anagrafica dai dati AdE."""
+        cf, pin, pwd, cfst = self._get_creds()
+        i = self._deleghe_selected_index()
+        cfcl = (self.deleghe_rows[i].get("codice_fiscale", "") if i is not None
+                else self.dlg_cf.get().strip())
+        if not self._validate(CF=cf, PIN=pin, Password=pwd, **{"CF Studio": cfst},
+                              **{"CF della delega": cfcl}):
+            return
+        profilo = int(self.std_profilo.get().split(" ", 1)[0])
+
+        def task(log):
+            from ade_auth import autentica, Creds, AuthError
+            import fec_anagrafica
+            log(f"\n{'─' * 60}\n↻  Aggiorna anagrafica da AdE — CF {cfcl}\n{'─' * 60}")
+            creds = Creds(nomeutente=cf, pin=pin, password=pwd, cfstudio=cfst,
+                          cf_cliente=cfcl, piva="", profilo=profilo)
+            try:
+                res = autentica(creds, backend="requests", log=log,
+                                scegli_piva=self._chiedi_piva_thread)
+            except AuthError as exc:
+                log(f"\n❌ Login fallito allo step «{exc.step}»: {exc.dettaglio}")
+                return
+            dati = fec_anagrafica.recupera(res, log=log)
+            self._applica_aggiornamento_delega(cfcl, dati, log)
+            log("\n[Completato]")
+
+        self._run_inprocess(task)
+
+    def _deleghe_reload(self):
+        """Ricarica l'anagrafica da disco e aggiorna la tabella (thread Tk)."""
+        self.deleghe_rows = self._deleghe.load_deleghe()
+        self._deleghe_refresh()
+
+    def _deleghe_aggiorna_tutte(self):
+        """
+        Aggiorna l'anagrafica di TUTTE le deleghe con un solo accesso: login una volta,
+        poi cambia utenza di lavoro per ogni CF (ade_auth.seleziona_utenza) e applica in
+        automatico i campi variati (senza popup per singolo cliente).
+        """
+        cf, pin, pwd, cfst = self._get_creds()
+        if not self.deleghe_rows:
+            messagebox.showinfo("Deleghe", "Nessuna delega in anagrafica.")
+            return
+        if not self._validate(CF=cf, PIN=pin, Password=pwd, **{"CF Studio": cfst}):
+            return
+        n = len(self.deleghe_rows)
+        if not messagebox.askyesno(
+                "Aggiorna tutte",
+                f"Aggiornare l'anagrafica di tutte le {n} deleghe da AdE?\n\n"
+                "I campi variati vengono applicati automaticamente (nessun popup per "
+                "singolo cliente). L'operazione richiede un solo accesso ma può durare "
+                "qualche minuto; puoi interromperla con «Interrompi»."):
+            return
+        profilo = int(self.std_profilo.get().split(" ", 1)[0])
+        righe = list(self.deleghe_rows)  # snapshot (stessi oggetti riga)
+
+        import fec_download
+        self.control = fec_download.Controllo()
+        self._reset_pausa_btn()
+        control = self.control
+
+        def task(log):
+            from ade_auth import autentica, seleziona_utenza, Creds, AuthError
+            import fec_anagrafica
+            import fec_download
+            log(f"\n{'─' * 60}\n↻↻  Aggiorna TUTTE le anagrafiche ({len(righe)} deleghe)\n{'─' * 60}")
+            quiet = lambda _m: None  # noqa: E731 — silenzia il log interno del login
+            auth = None
+            aggiornate = 0
+            falliti = []
+            interrotto = False
+            for i, row in enumerate(righe, 1):
+                try:
+                    control.check()   # pausa/annullamento cooperativo tra un cliente e l'altro
+                except fec_download.DownloadAnnullato:
+                    interrotto = True
+                    log("\n⏹  Interrotto: salvo le deleghe già aggiornate.")
+                    break
+                cfcl = str(row.get("codice_fiscale", "")).strip()
+                if not cfcl:
+                    continue
+                # P.IVA salvata (se presente) → evita la scelta su CF multi-P.IVA.
+                creds = Creds(nomeutente=cf, pin=pin, password=pwd, cfstudio=cfst,
+                              cf_cliente=cfcl, piva=str(row.get("partita_iva", "")).strip(),
+                              profilo=profilo)
+                log(f"\n[{i}/{len(righe)}] CF {cfcl}…")
+                try:
+                    if auth is None:
+                        auth = autentica(creds, backend="requests", log=quiet)
+                    else:
+                        auth = seleziona_utenza(auth, creds, log=quiet)
+                except AuthError as exc:
+                    log(f"   ❌ accesso/utenza: {exc.dettaglio}")
+                    falliti.append(cfcl)
+                    continue
+                try:
+                    dati = fec_anagrafica.recupera(auth)
+                except Exception as exc:  # noqa: BLE001
+                    log(f"   ⚠️  recupero dati fallito: {exc}")
+                    falliti.append(cfcl)
+                    continue
+                diffs = fec_anagrafica.differenze(row, dati)
+                if not diffs:
+                    log("   = già allineata")
+                    continue
+                for k in diffs:
+                    row[k] = dati[k]
+                self.deleghe_rows[self.deleghe_rows.index(row)] = self._deleghe._norm_row(row)
+                aggiornate += 1
+                log("   ✓ aggiornati: "
+                    + ", ".join(str(fec_anagrafica.ETICHETTE.get(k, k)) for k in diffs))
+
+            # Salva sempre ciò che è stato aggiornato, anche se interrotto a metà.
+            if aggiornate:
+                self._deleghe.save_deleghe(self.deleghe_rows)
+                self.root.after(0, self._deleghe_reload)
+            stato = "Interrotto" if interrotto else "Completato"
+            log(f"\n[{stato}] {aggiornate} aggiornate, {len(falliti)} non riuscite"
+                + (f" ({', '.join(falliti)})" if falliti else "."))
+
+        self._run_inprocess(task)
+
+    def _applica_aggiornamento_delega(self, cf: str, dati: dict, log):
+        """
+        Confronta i dati AdE con l'anagrafica salvata per `cf` e, se ci sono differenze,
+        mostra il popup di scelta e applica i campi selezionati. Invocato dal worker
+        thread: il popup e la modifica della tabella sono marshallati sul thread Tk.
+        """
+        import fec_anagrafica
+        cf_up = (cf or "").strip().upper()
+        if not cf_up:
+            return
+        saved = next((r for r in self.deleghe_rows
+                      if r.get("codice_fiscale", "").upper() == cf_up), {})
+        diffs = fec_anagrafica.differenze(saved, dati)
+        if not diffs:
+            log("Anagrafica delega già allineata ai dati AdE (nessuna modifica).")
+            return
+        applicati = self._chiedi_aggiornamento_thread(cf_up, dati, diffs)
+        if applicati:
+            log(f"Anagrafica delega aggiornata: {', '.join(applicati)}.")
+        else:
+            log("Aggiornamento anagrafica non applicato.")
+
+    def _chiedi_aggiornamento_thread(self, cf: str, dati: dict, diffs: dict) -> list:
+        """Mostra sul thread Tk il popup di aggiornamento e attende l'esito (Event)."""
+        import threading
+        evt = threading.Event()
+        box = {"applicati": []}
+
+        def _ask():
+            try:
+                box["applicati"] = self._dialog_e_applica_aggiornamento(cf, dati, diffs)
+            finally:
+                evt.set()
+
+        self.root.after(0, _ask)
+        evt.wait()
+        return box["applicati"]
+
+    def _dialog_e_applica_aggiornamento(self, cf: str, dati: dict, diffs: dict) -> list:
+        """Popup (thread Tk): checkbox per campo variato; salva i selezionati. Ritorna
+        le etichette dei campi effettivamente aggiornati."""
+        import fec_anagrafica
+        win = tk.Toplevel(self.root)
+        win.title("Aggiorna anagrafica delega")
+        win.transient(self.root)
+        win.grab_set()
+        win.resizable(False, False)
+
+        frm = ttk.Frame(win, padding=(20, 16))
+        frm.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(frm, text=f"I dati AdE differiscono dall'anagrafica per il CF {cf}. "
+                            "Seleziona i campi da aggiornare:",
+                  wraplength=470, justify="left").pack(anchor="w", pady=(0, 10))
+
+        def _fmt(v):
+            if isinstance(v, bool):
+                return "Sì" if v else "No"
+            return str(v) if str(v).strip() else "(vuoto)"
+
+        vars_: dict = {}
+        for k, (old, new) in diffs.items():
+            var = tk.BooleanVar(value=True)
+            vars_[k] = var
+            lbl = fec_anagrafica.ETICHETTE.get(k, k)
+            ttk.Checkbutton(frm, variable=var,
+                            text=f"{lbl}:   {_fmt(old)}  →  {_fmt(new)}").pack(anchor="w")
+
+        applicati: list = []
+
+        def salva():
+            scelti = [k for k, v in vars_.items() if v.get()]
+            if scelti:
+                self._salva_campi_delega(cf, dati, scelti)
+                applicati.extend(fec_anagrafica.ETICHETTE.get(k, k) for k in scelti)
+            win.destroy()
+
+        barra = ttk.Frame(frm)
+        barra.pack(anchor="e", pady=(14, 0))
+        ttk.Button(barra, text="Annulla", command=win.destroy).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(barra, text="Salva selezionati", command=salva).pack(side=tk.RIGHT)
+        win.bind("<Escape>", lambda _e: win.destroy())
+        win.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_width()) // 2
+        y = self.root.winfo_rooty() + 100
+        win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        win.wait_window()
+        return applicati
+
+    def _salva_campi_delega(self, cf: str, dati: dict, campi: list):
+        """Applica i `campi` scelti alla riga del CF (creandola se assente) e salva."""
+        cf_up = cf.upper()
+        row = next((r for r in self.deleghe_rows
+                    if r.get("codice_fiscale", "").upper() == cf_up), None)
+        if row is None:
+            row = self._deleghe._norm_row({"codice_fiscale": cf_up})
+            self.deleghe_rows.append(row)
+        for k in campi:
+            row[k] = dati.get(k)
+        idx = self.deleghe_rows.index(row)
+        self.deleghe_rows[idx] = self._deleghe._norm_row(row)
+        self._deleghe.save_deleghe(self.deleghe_rows)
+        self.deleghe_rows = self._deleghe.load_deleghe()
+        self._deleghe_refresh()
+
+    def _deleghe_sort(self, col: str):
+        """
+        Ordina la tabella deleghe per la colonna cliccata, alternando crescente/
+        decrescente a ogni click sulla stessa intestazione. Ordina per data reale la
+        colonna «fine delega» e per valore booleano «conservazione»; le altre per testo
+        (case-insensitive). I vuoti vanno in fondo.
+        """
+        from datetime import datetime
+        reverse = (getattr(self, "_deleghe_sort_col", None) == col
+                   and not getattr(self, "_deleghe_sort_rev", False))
+        self._deleghe_sort_col = col
+        self._deleghe_sort_rev = reverse
+
+        def chiave(row):
+            v = row.get(col, "")
+            if col == "conservazione":
+                return (bool(v),)
+            if col == "data_fine_delega":
+                d = self._deleghe._parse_data(str(v or ""))
+                return (d is None, d or datetime.min)
+            s = str(v or "")
+            return (s == "", s.lower())
+
+        self.deleghe_rows.sort(key=chiave, reverse=reverse)
+        for k, label, _w in self._DELEGHE_COLS:
+            freccia = (" ▼" if reverse else " ▲") if k == col else ""
+            self.deleghe_tree.heading(k, text=label + freccia)
+        self._deleghe_refresh()
+
+    def _deleghe_refresh(self):
+        """Svuota e ripopola il Treeview da self.deleghe_rows."""
+        self.deleghe_tree.delete(*self.deleghe_tree.get_children())
+        for i, row in enumerate(self.deleghe_rows):
+            vals = [row.get(k, "") for k in (c[0] for c in self._DELEGHE_COLS)]
+            vals[4] = "Sì" if row.get("conservazione") else "No"  # colonna conservazione
+            self.deleghe_tree.insert("", "end", iid=str(i), values=vals)
+
+    def _deleghe_selected_index(self):
+        sel = self.deleghe_tree.selection()
+        return int(sel[0]) if sel else None
+
+    def _deleghe_on_select(self, _=None):
+        i = self._deleghe_selected_index()
+        if i is None:
+            return
+        row = self.deleghe_rows[i]
+        self.dlg_denom.set(row.get("denominazione", ""))
+        self.dlg_cf.set(row.get("codice_fiscale", ""))
+        self.dlg_piva.set(row.get("partita_iva", ""))
+        self.dlg_fine.set(row.get("data_fine_delega", ""))
+        self.dlg_dest.set(row.get("codice_destinatario", ""))
+        self.dlg_cons.set(bool(row.get("conservazione")))
+
+    def _deleghe_clear_form(self):
+        for v in (self.dlg_denom, self.dlg_cf, self.dlg_piva, self.dlg_fine, self.dlg_dest):
+            v.set("")
+        self.dlg_cons.set(False)
+        if self.deleghe_tree.selection():
+            self.deleghe_tree.selection_remove(self.deleghe_tree.selection())
+
+    def _deleghe_save(self):
+        cf = self.dlg_cf.get().strip()
+        if not cf:
+            messagebox.showwarning("Deleghe", "Il codice fiscale è obbligatorio.")
+            return
+        nuova = {
+            "denominazione": self.dlg_denom.get(),
+            "codice_fiscale": cf,
+            "partita_iva": self.dlg_piva.get(),
+            "data_fine_delega": self.dlg_fine.get(),
+            "conservazione": self.dlg_cons.get(),
+            "codice_destinatario": self.dlg_dest.get(),
+        }
+        # Salvataggio manuale: sovrascrive sempre i campi col valore del form (anche vuoti)
+        # se la riga esiste, così l'utente può correggere/cancellare un valore.
+        cf_up = cf.upper()
+        esistente = next((r for r in self.deleghe_rows
+                          if r.get("codice_fiscale", "").upper() == cf_up), None)
+        if esistente:
+            esistente.update(self._deleghe._norm_row(nuova))
+        else:
+            self.deleghe_rows.append(self._deleghe._norm_row(nuova))
+        self._deleghe.save_deleghe(self.deleghe_rows)
+        self.deleghe_rows = self._deleghe.load_deleghe()
+        self._deleghe_refresh()
+
+    def _deleghe_delete(self):
+        i = self._deleghe_selected_index()
+        if i is None:
+            messagebox.showinfo("Deleghe", "Seleziona una riga da eliminare.")
+            return
+        row = self.deleghe_rows[i]
+        if not messagebox.askyesno("Deleghe", f"Eliminare la delega di "
+                                   f"«{row.get('denominazione') or row.get('codice_fiscale')}»?"):
+            return
+        del self.deleghe_rows[i]
+        self._deleghe.save_deleghe(self.deleghe_rows)
+        self._deleghe_refresh()
+        self._deleghe_clear_form()
+
+    def _deleghe_use(self):
+        i = self._deleghe_selected_index()
+        if i is None:
+            messagebox.showinfo("Deleghe", "Seleziona un cliente da usare per il download.")
+            return
+        row = self.deleghe_rows[i]
+        self.std_cf_cl.set(row.get("codice_fiscale", ""))
+        self.std_piva.set(row.get("partita_iva", ""))
+        if hasattr(self, "_std_tab"):
+            nb = self._std_tab.master  # il notebook a cui è stata aggiunta la scheda
+            nb.select(self._std_tab)
+
+    def _deleghe_import_ade(self):
+        path = filedialog.askopenfilename(
+            title="Seleziona il CSV «Elenco deleganti» esportato dall'AdE",
+            initialdir=os.path.join(SCRIPT_DIR, "_materiale"),
+            filetypes=[("CSV", "*.csv"), ("Tutti i file", "*.*")])
+        if not path:
+            return
+        try:
+            nuove = self._deleghe.import_csv_ade(path)
+        except Exception as e:  # noqa: BLE001 — errore mostrato all'utente
+            messagebox.showerror("Import AdE", f"Impossibile leggere il file:\n{e}")
+            return
+        self.deleghe_rows, agg, upd = self._deleghe.merge_many(self.deleghe_rows, nuove)
+        self._deleghe.save_deleghe(self.deleghe_rows)
+        self.deleghe_rows = self._deleghe.load_deleghe()
+        self._deleghe_refresh()
+        messagebox.showinfo("Import AdE", f"Deleghe Fatture & Corrispettivi importate.\n"
+                                          f"Nuove: {agg}   Aggiornate: {upd}")
+
+    def _deleghe_import_app(self):
+        path = filedialog.askopenfilename(
+            title="Importa CSV deleghe (formato app)",
+            filetypes=[("CSV", "*.csv"), ("Tutti i file", "*.*")])
+        if not path:
+            return
+        try:
+            nuove = self._deleghe.import_csv_app(path)
+        except Exception as e:  # noqa: BLE001
+            messagebox.showerror("Import CSV", f"Impossibile leggere il file:\n{e}")
+            return
+        self.deleghe_rows, agg, upd = self._deleghe.merge_many(self.deleghe_rows, nuove)
+        self._deleghe.save_deleghe(self.deleghe_rows)
+        self.deleghe_rows = self._deleghe.load_deleghe()
+        self._deleghe_refresh()
+        messagebox.showinfo("Import CSV", f"Righe importate.\nNuove: {agg}   Aggiornate: {upd}")
+
+    def _deleghe_export_app(self):
+        path = filedialog.asksaveasfilename(
+            title="Esporta CSV deleghe (formato app)",
+            defaultextension=".csv", initialfile="deleghe.csv",
+            filetypes=[("CSV", "*.csv")])
+        if not path:
+            return
+        try:
+            self._deleghe.export_csv_app(self.deleghe_rows, path)
+        except Exception as e:  # noqa: BLE001
+            messagebox.showerror("Export CSV", f"Impossibile salvare il file:\n{e}")
+            return
+        messagebox.showinfo("Export CSV", f"Esportate {len(self.deleghe_rows)} righe in:\n{path}")
+
     def _tab_standard(self, nb: ttk.Notebook):
         tab = ttk.Frame(nb)
         nb.add(tab, text="  Download Standard  ")
+        self._std_tab = tab  # riferimento per «Usa per download» dalla scheda Deleghe
         f = self._lf(tab)
 
         self.std_tipo    = tk.StringVar(value="Fatture Emesse")
@@ -909,7 +1840,8 @@ class FecGui:
         r = self._build_access_controls(f, r + 1) - 1
 
         r += 1; self._row(f, r, "CF Cliente:", self.std_cf_cl)
-        r += 1; self._row(f, r, "P.IVA Cliente:", self.std_piva)
+        r += 1; self._row(f, r, "P.IVA (opzionale):", self.std_piva)
+
         r += 1; r = self._build_date_range(f, r, self.std_dal, self.std_al, "%d%m%Y") - 1
 
         r += 1
@@ -926,13 +1858,24 @@ class FecGui:
         ttk.Radiobutton(self._tipdata_frame, text="Data Ricezione", variable=self.std_tipdata, value="1").pack(side=tk.LEFT)
         ttk.Radiobutton(self._tipdata_frame, text="Data Emissione", variable=self.std_tipdata, value="2").pack(side=tk.LEFT, padx=14)
 
+        r += 1
+        ttk.Checkbutton(f, text="Non scaricare fatture RIFIUTATE DA P.A.",
+                        variable=self.std_escludi_scartate).grid(
+            row=r, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
+        r += 1
+        ttk.Checkbutton(f, text="Estrai file p7m (fatture firmate digitalmente)",
+                        variable=self.std_estrai_p7m).grid(
+            row=r, column=0, columnspan=2, sticky="w")
+
         self._std_tipo_changed()
 
         r += 1; self._note(f, r, "Download in-process con un solo login "
                                  "(backend/headless dalla scheda Test Login). "
                                  "«Cerca per» vale solo per le Fatture Ricevute.")
 
-        r += 1; self._run_btn(f, r, "Avvia Download", self._run_standard)
+        r += 1; r = self._no_update_check(f, r)
+        self._run_btn(f, r, "Avvia Download", self._run_standard)
 
     def _std_pick_destdir(self):
         scelta = filedialog.askdirectory(
@@ -947,7 +1890,7 @@ class FecGui:
         state = "normal" if visible else "disabled"
         self._tipdata_lbl.configure(foreground=fg)
         for w in self._tipdata_frame.winfo_children():
-            w.configure(state=state)
+            w.configure(state=state)  # type: ignore[call-arg]  # i figli (radio/combo) supportano -state
         self._update_dest_info()
 
     def _update_dest_info(self):
@@ -971,8 +1914,11 @@ class FecGui:
         tipo = self.std_tipo.get()
         tipdata = int(self.std_tipdata.get())
 
+        # P.IVA NON obbligatoria: la consultazione usa solo il CF; se il CF ha più P.IVA
+        # e il campo è vuoto, in fase di login compare il popup di scelta. Se indicata,
+        # si usa quella.
         if not self._validate(CF=cf, PIN=pin, Password=pwd, **{"CF Studio": cfst},
-                              **{"CF Cliente": cfcl}, **{"P.IVA Cliente": piva},
+                              **{"CF Cliente": cfcl},
                               **{"Data inizio": dal}, **{"Data fine": al}):
             return
 
@@ -983,33 +1929,50 @@ class FecGui:
         d_tr,  s_tr  = self._dest_classe("trans_ricevute")
         d_md,  s_md  = self._dest_classe("messe_disposizione")
 
-        # Tutte le tipologie ora girano in-process (un solo login, niente subprocess).
+        # Tutte le tipologie girano in-process (un solo login), via fec_queue che
+        # spezza i periodi > 3 mesi (C.5) e unisce i risultati.
+        escludi_scartate = bool(self.std_escludi_scartate.get())
+        estrai_p7m = bool(self.std_estrai_p7m.get())
+
         OPS = {
-            "Fatture Emesse": lambda res, log, fd:
-                fd.scarica_emesse(res, dal, al, cfcl, dest_dir=d_em,
-                                  sottocartella=s_em, log=log),
-            "Fatture Ricevute": lambda res, log, fd:
-                fd.scarica_ricevute(res, dal, al, cfcl, tipo_data=tipdata,
-                                    dest_dir=d_ri, sottocartella=s_ri, log=log),
-            "Transfrontaliere Emesse": lambda res, log, fd:
-                fd.scarica_transfrontaliere_emesse(res, dal, al, cfcl,
-                                                   dest_dir=d_te, sottocartella=s_te, log=log),
-            "Transfrontaliere Ricevute": lambda res, log, fd:
-                fd.scarica_transfrontaliere_ricevute(res, dal, al, cfcl,
-                                                     dest_dir=d_tr, sottocartella=s_tr, log=log),
-            "Messe a Disposizione": lambda res, log, fd:
-                fd.scarica_messe_a_disposizione(res, dal, al, cfcl,
-                                                dest_dir=d_md, sottocartella=s_md, log=log),
+            "Fatture Emesse": lambda res, log, fq, ctrl:
+                fq.esegui_richiesta(res, "emesse", dal=dal, al=al, cf_cliente=cfcl,
+                                    dest_dir=d_em, sottocartella=s_em, control=ctrl, log=log,
+                                    escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m),
+            "Fatture Ricevute": lambda res, log, fq, ctrl:
+                fq.esegui_richiesta(res, "ricevute", dal=dal, al=al, cf_cliente=cfcl,
+                                    tipo_data=tipdata, dest_dir=d_ri, sottocartella=s_ri,
+                                    control=ctrl, log=log,
+                                    escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m),
+            "Transfrontaliere Emesse": lambda res, log, fq, ctrl:
+                fq.esegui_richiesta(res, "trans_emesse", dal=dal, al=al, cf_cliente=cfcl,
+                                    dest_dir=d_te, sottocartella=s_te, control=ctrl, log=log,
+                                    escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m),
+            "Transfrontaliere Ricevute": lambda res, log, fq, ctrl:
+                fq.esegui_richiesta(res, "trans_ricevute", dal=dal, al=al, cf_cliente=cfcl,
+                                    dest_dir=d_tr, sottocartella=s_tr, control=ctrl, log=log,
+                                    escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m),
+            "Messe a Disposizione": lambda res, log, fq, ctrl:
+                fq.esegui_richiesta(res, "messe_disposizione", dal=dal, al=al, cf_cliente=cfcl,
+                                    dest_dir=d_md, sottocartella=s_md, control=ctrl, log=log,
+                                    escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m),
         }
         self._esegui_in_process(cfcl, piva, self.std_profilo.get(), tipo, OPS[tipo])
 
     # ─────────────────────────────────────────────────────────────────────────
-    # TAB 2 – Fatture Massive
+    # TAB 2 – Richieste Massive
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _tab_massive(self, nb: ttk.Notebook):
+    def _tab_richiesta_massiva(self, nb: ttk.Notebook):
+        """
+        Tab unica GUI per «Fatture Massive» + «Corrispettivi»: entrambe caricano un
+        XML sulla stessa pagina del portale (/cons/mass-services/) per una richiesta
+        di download massivo, differiscono solo nel tipo di richiesta selezionato.
+        Nel core restano funzioni separate (fec_download/fec_queue) per
+        retrocompatibilità; qui si accorpano solo UI e handler.
+        """
         tab = ttk.Frame(nb)
-        nb.add(tab, text="  Fatture Massive  ")
+        nb.add(tab, text="  Richieste Massive  ")
         f = self._lf(tab)
 
         self.mass_tipo    = tk.StringVar(value="Emesse")
@@ -1024,6 +1987,7 @@ class FecGui:
             "Emesse",
             "Ricevute per Data Emissione",
             "Ricevute per Data Ricezione",
+            "Corrispettivi",
         ])
         r += 1; self._combo(f, r, "Profilo:", self.mass_profilo, PROFILI)
         r = self._build_access_controls(f, r + 1) - 1
@@ -1031,35 +1995,37 @@ class FecGui:
         r += 1; self._row(f, r, "P.IVA Cliente:", self.mass_piva)
         r += 1; r = self._build_date_range(f, r, self.mass_dal, self.mass_al, "%Y-%m-%d") - 1
         r += 1; self._note(f, r, "Genera e carica un file XML su /cons/mass-services/ dell'AdE.  Date nel formato AAAA-MM-GG.")
-        r += 1; self._run_btn(f, r, "Avvia Richiesta Massiva", self._run_massive)
+        r += 1; r = self._no_update_check(f, r)
+        self._run_btn(f, r, "Avvia Richiesta Massiva", self._run_richiesta_massiva)
 
-    def _run_massive(self):
+    # Tipo richiesta -> (classe cartella DOC_CLASSI, chiave fec_queue.esegui_richiesta)
+    _RICHIESTA_MASSIVA_OPS = {
+        "Emesse":                       ("massive",       "massive_emesse"),
+        "Ricevute per Data Emissione":  ("massive",       "massive_ricevute_emissione"),
+        "Ricevute per Data Ricezione":  ("massive",       "massive_ricevute_ricezione"),
+        "Corrispettivi":                ("corrispettivi", "corrispettivi"),
+    }
+
+    def _run_richiesta_massiva(self):
         cf, pin, pwd, cfst = self._get_creds()
         cfcl = self.mass_cfcl.get().strip()
         piva = self.mass_piva.get().strip()
         dal  = self.mass_dal.get().strip()
         al   = self.mass_al.get().strip()
         tipo = self.mass_tipo.get()
-        destdir, sotto = self._dest_classe("massive")
 
         if not self._validate(CF=cf, PIN=pin, Password=pwd, **{"CF Studio": cfst},
                               **{"CF Cliente": cfcl}, **{"P.IVA Cliente": piva},
                               **{"Data inizio": dal}, **{"Data fine": al}):
             return
 
-        OPS = {
-            "Emesse": lambda res, log, fd:
-                fd.richiesta_massiva_emesse(res, dal, al, cfcl, piva,
-                                            dest_dir=destdir, sottocartella=sotto, log=log),
-            "Ricevute per Data Emissione": lambda res, log, fd:
-                fd.richiesta_massiva_ricevute_emissione(res, dal, al, cfcl, piva,
-                                                        dest_dir=destdir, sottocartella=sotto, log=log),
-            "Ricevute per Data Ricezione": lambda res, log, fd:
-                fd.richiesta_massiva_ricevute_ricezione(res, dal, al, cfcl, piva,
-                                                        dest_dir=destdir, sottocartella=sotto, log=log),
-        }
+        classe, chiave_richiesta = self._RICHIESTA_MASSIVA_OPS[tipo]
+        destdir, sotto = self._dest_classe(classe)
+        op = lambda res, log, fq, ctrl: fq.esegui_richiesta(
+            res, chiave_richiesta, dal=dal, al=al, cf_cliente=cfcl, piva=piva,
+            dest_dir=destdir, sottocartella=sotto, control=ctrl, log=log)
         self._esegui_in_process(cfcl, piva, self.mass_profilo.get(),
-                                f"Massive {tipo}", OPS[tipo])
+                                f"Richiesta Massiva {tipo}", op)
 
     # ─────────────────────────────────────────────────────────────────────────
     # TAB 3 – Bolli Virtuali
@@ -1080,71 +2046,120 @@ class FecGui:
         self._combo(f, r, "Profilo:", self.bolli_profilo, PROFILI)
         r = self._build_access_controls(f, r + 1) - 1
         r += 1; self._row(f, r, "CF Cliente:", self.bolli_cfcl)
-        r += 1; self._row(f, r, "P.IVA Cliente:", self.bolli_piva)
-        r += 1; self._combo(f, r, "Trimestre:", self.bolli_trim, ["1", "2", "3", "4"])
-        r += 1; self._row(f, r, "Anno (YYYY):", self.bolli_anno, 8)
-        r += 1; self._note(f, r, "Scarica i dati bolli virtuali e genera PDF F24 per il trimestre/anno selezionato.")
-        r += 1; self._run_btn(f, r, "Avvia Download Bolli", self._run_bolli)
+        r += 1; self._row(f, r, "P.IVA (opzionale):", self.bolli_piva)
+        r += 1; self._combo(f, r, "Trimestre:", self.bolli_trim,
+                            ["1", "2", "3", "4", "Tutto l'anno"])
+        r += 1
+        ttk.Label(f, text="Anno (YYYY):").grid(row=r, column=0, sticky="w", pady=4, padx=(0, 8))
+        vcmd_bolli = (f.register(lambda P: P == "" or (P.isdigit() and len(P) <= 4)), "%P")
+        ttk.Spinbox(f, textvariable=self.bolli_anno, width=8, from_=2000, to=2100,
+                    validate="key", validatecommand=vcmd_bolli).grid(
+            row=r, column=1, sticky="w")
+        r += 1; self._note(f, r, "Genera un riepilogo CSV (elenco A/B, importo calcolato, "
+                                 "scadenza, stato pagamento, versamenti F24) per il trimestre o "
+                                 "l'intero anno selezionato. La generazione del modello F24 non è disponibile "
+                                 "da questa procedura: va completata sul portale AdE.")
+        r += 1; r = self._no_update_check(f, r)
+        self._run_btn(f, r, "Genera Riepilogo Bolli", self._run_bolli)
 
     def _run_bolli(self):
         cf, pin, pwd, cfst = self._get_creds()
         cfcl = self.bolli_cfcl.get().strip()
         piva = self.bolli_piva.get().strip()
-        trim = self.bolli_trim.get().strip()
+        trim_ui = self.bolli_trim.get().strip()
+        trim = "" if trim_ui == "Tutto l'anno" else trim_ui
         anno = self.bolli_anno.get().strip()
         destdir, sotto = self._dest_classe("bolli")
 
         if not self._validate(CF=cf, PIN=pin, Password=pwd, **{"CF Studio": cfst},
-                              **{"CF Cliente": cfcl}, **{"P.IVA Cliente": piva},
-                              Trimestre=trim, Anno=anno):
+                              **{"CF Cliente": cfcl},
+                              Trimestre=trim_ui, Anno=anno):
             return
 
-        op = lambda res, log, fd: fd.scarica_bolli(res, cfcl, piva, trim, anno,
-                                                   dest_dir=destdir, sottocartella=sotto, log=log)
+        op = lambda res, log, fq, ctrl: fq.esegui_richiesta(
+            res, "bolli", cf_cliente=cfcl, piva=piva, trimestre=trim, anno=anno,
+            dest_dir=destdir, sottocartella=sotto, control=ctrl, log=log)
         self._esegui_in_process(cfcl, piva, self.bolli_profilo.get(),
-                                f"Bolli {trim}/{anno}", op)
+                                f"Bolli {trim_ui}/{anno}", op)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # TAB 4 – Corrispettivi
+    # TAB Utility (C.9/G.6) – elenchi Excel di riepilogo (dev-only)
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _tab_corrispettivi(self, nb: ttk.Notebook):
+    # Etichetta del combo «Tipo elenco» → chiave fec_utility.TIPI_ELENCO.
+    _UTILITY_TIPI = {
+        "Fatture Emesse":                    "emesse",
+        "Fatture Ricevute (per ricezione)":  "ricevute_ricezione",
+        "Fatture Ricevute (per emissione)":  "ricevute_emissione",
+        "Transfrontaliere Emesse":           "trans_emesse",
+        "Transfrontaliere Ricevute":         "trans_ricevute",
+    }
+
+    def _tab_utility(self, nb: ttk.Notebook):
         tab = ttk.Frame(nb)
-        nb.add(tab, text="  Corrispettivi  ")
+        nb.add(tab, text="  Utility  ")
         f = self._lf(tab)
 
-        self.corr_profilo = tk.StringVar(value=PROFILI[0])
-        self.corr_cfcl = tk.StringVar()
-        self.corr_piva = tk.StringVar()
-        self.corr_dal  = tk.StringVar()
-        self.corr_al   = tk.StringVar()
+        self.util_profilo = tk.StringVar(value=PROFILI[0])
+        self.util_cfcl = tk.StringVar()
+        self.util_piva = tk.StringVar()
+        self.util_tipo = tk.StringVar(value="Fatture Emesse")
+        self.util_dal = tk.StringVar()
+        self.util_al = tk.StringVar()
 
         r = 0
-        self._combo(f, r, "Profilo:", self.corr_profilo, PROFILI)
+        self._combo(f, r, "Tipo elenco:", self.util_tipo,
+                    list(self._UTILITY_TIPI))
+        r += 1; self._combo(f, r, "Profilo:", self.util_profilo, PROFILI)
         r = self._build_access_controls(f, r + 1) - 1
-        r += 1; self._row(f, r, "CF Cliente:", self.corr_cfcl)
-        r += 1; self._row(f, r, "P.IVA Cliente:", self.corr_piva)
-        r += 1; r = self._build_date_range(f, r, self.corr_dal, self.corr_al, "%Y-%m-%d") - 1
-        r += 1; self._note(f, r, "Genera XML e carica su /cons/mass-services/.  Date nel formato AAAA-MM-GG.")
-        r += 1; self._run_btn(f, r, "Avvia Corrispettivi", self._run_corrispettivi)
+        r += 1; self._row(f, r, "CF Cliente:", self.util_cfcl)
+        r += 1; self._row(f, r, "P.IVA (opzionale):", self.util_piva)
+        r += 1; r = self._build_date_range(f, r, self.util_dal, self.util_al,
+                                           "%d%m%Y") - 1
+        r += 1; self._note(f, r, "Genera un file Excel (.xlsx) di riepilogo con una riga "
+                                 "per fattura e colonne per aliquota IVA / natura "
+                                 "(richiede il pacchetto opzionale «openpyxl»). "
+                                 "Una chiamata di dettaglio per fattura: su periodi ampi "
+                                 "richiede qualche minuto.")
+        r += 1; r = self._no_update_check(f, r)
+        self._run_btn(f, r, "Fatture → Excel", self._run_utility_excel)
+        r += 1
+        ttk.Button(f, text="Corrispettivi → Excel", state="disabled").grid(
+            row=r, column=1, sticky="w", pady=(2, 0))
+        r += 1; self._note(f, r, "«Corrispettivi → Excel» è in sviluppo: gli endpoint di "
+                                 "consultazione corrispettivi non sono ancora noti "
+                                 "(richiede una cattura HAR sul portale).")
 
-    def _run_corrispettivi(self):
+    def _run_utility_excel(self):
         cf, pin, pwd, cfst = self._get_creds()
-        cfcl = self.corr_cfcl.get().strip()
-        piva = self.corr_piva.get().strip()
-        dal  = self.corr_dal.get().strip()
-        al   = self.corr_al.get().strip()
-        destdir, sotto = self._dest_classe("corrispettivi")
+        cfcl = self.util_cfcl.get().strip()
+        piva = self.util_piva.get().strip()
+        dal = self.util_dal.get().strip()
+        al = self.util_al.get().strip()
+        tipo_ui = self.util_tipo.get()
+        tipo = self._UTILITY_TIPI.get(tipo_ui, "emesse")
+        destdir, sotto = self._dest_classe("utility")
 
         if not self._validate(CF=cf, PIN=pin, Password=pwd, **{"CF Studio": cfst},
-                              **{"CF Cliente": cfcl}, **{"P.IVA Cliente": piva},
+                              **{"CF Cliente": cfcl},
                               **{"Data inizio": dal}, **{"Data fine": al}):
             return
+        mancanti = fec_deps.find_missing().get("excel", [])
+        if mancanti:
+            messagebox.showerror(
+                "Dipendenza mancante",
+                "L'export Excel richiede il pacchetto «openpyxl», non installato.\n\n"
+                f"Installa con:  {fec_deps.pip_install_hint(mancanti)}")
+            return
 
-        op = lambda res, log, fd: fd.richiesta_corrispettivi(res, dal, al, cfcl, piva,
-                                                             dest_dir=destdir, sottocartella=sotto, log=log)
-        self._esegui_in_process(cfcl, piva, self.corr_profilo.get(),
-                                "Corrispettivi", op)
+        def op(res, log, fq, ctrl):
+            import fec_utility
+            fec_utility.elenco_fatture_excel(
+                res, cfcl, piva, tipo, dal, al,
+                dest_dir=destdir, sottocartella=sotto, control=ctrl, log=log)
+
+        self._esegui_in_process(cfcl, piva, self.util_profilo.get(),
+                                f"Elenco Excel {tipo_ui}", op)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
