@@ -270,6 +270,71 @@ def _ordina_chiavi_pivot(chiavi) -> list[str]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Scrittura xlsx (openpyxl, import lazy: dipendenza opzionale ruolo "excel")
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _scrivi_xlsx(percorso: str, chiavi_pivot: list[str], righe: list[dict]) -> None:
+    """
+    Scrive l'elenco fatture in `percorso`: intestazioni in grassetto, coppie pivot
+    `Imp. X | IVA X` per ogni chiave, riga TOTALI finale su sfondo verde, formato
+    numerico contabile e riga di intestazione bloccata.
+    """
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        import fec_deps
+        raise DownloadError("L'export Excel richiede il pacchetto «openpyxl»: "
+                            f"{fec_deps.pip_install_hint(['openpyxl'])}")
+
+    intestazioni = list(COLONNE_FISSE)
+    for chiave in chiavi_pivot:
+        intestazioni += [f"Imp. {chiave}", f"IVA {chiave}"]
+    intestazioni += COLONNE_TOTALI
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Elenco fatture"
+    ws.append(intestazioni)
+    for cella in ws[1]:
+        cella.font = Font(bold=True)
+    ws.freeze_panes = "A2"
+
+    prima_num = len(COLONNE_FISSE) + 1          # prima colonna numerica (1-based)
+    ultima_num = len(intestazioni) - 1          # Bollo Virtuale (testo) esclusa
+
+    totali = [0.0] * (ultima_num - prima_num + 1)
+    for riga in righe:
+        valori = [riga.get(c, "") for c in COLONNE_FISSE]
+        for chiave in chiavi_pivot:
+            imp, iva = riga["iva"].get(chiave, (None, None))
+            valori += [imp, iva]
+        valori += [riga["Tot. Imponibile"], riga["Tot. IVA"], riga["Totale Fattura"],
+                   riga.get("Bollo Virtuale", "")]
+        ws.append(valori)
+        for i, v in enumerate(valori[prima_num - 1:ultima_num]):
+            if isinstance(v, (int, float)):
+                totali[i] += v
+
+    riga_tot = ["TOTALI"] + [""] * (prima_num - 2) + totali + [""]
+    ws.append(riga_tot)
+    verde = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+    for cella in ws[ws.max_row]:
+        cella.font = Font(bold=True)
+        cella.fill = verde
+
+    for col in range(prima_num, ultima_num + 1):
+        for cella in ws[get_column_letter(col)][1:]:
+            cella.number_format = "#,##0.00"
+    for col, titolo in enumerate(intestazioni, start=1):
+        larghezza = 22 if titolo == "Cliente/Fornitore" else max(12, len(titolo) + 3)
+        ws.column_dimensions[get_column_letter(col)].width = larghezza
+
+    wb.save(percorso)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Funzione pubblica
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -299,8 +364,29 @@ def elenco_fatture_excel(auth: AuthResult, cf_cliente: str, piva: str, tipo: str
         raise DownloadError("Nessuna fattura trovata nell'intervallo richiesto: "
                             "nessun file Excel generato.")
 
-    # TODO (step 4-5 del piano C.9): dettaglio per fattura + pivot aliquote + xlsx.
-    raise DownloadError("Export Excel in sviluppo: parser non ancora implementato.")
+    righe: list[dict] = []
+    for i, voce in enumerate(voci, start=1):
+        if control:
+            control.check()
+        fattura_file = f"{voce.get('tipoInvio', '')}{voce.get('idFattura', '')}"
+        dettaglio = _dettaglio_fattura(auth, fattura_file)
+        if dettaglio is None:
+            log(f"   ⚠️  Dettaglio {fattura_file} non ottenuto: riga con i soli "
+                "dati di elenco (importi a zero).")
+        righe.append(_estrai_riga(voce, dettaglio))
+        if i % 10 == 0 or i == len(voci):
+            log(f"  Dettaglio fatture: {i}/{len(voci)}")
+
+    chiavi_pivot = _ordina_chiavi_pivot({k for r in righe for k in r["iva"]})
+
+    cartella = _cartella(dest_dir, "ElencoFatture", cf_cliente, sottocartella)
+    prefisso = (piva or cf_cliente).strip()
+    percorso = os.path.join(cartella, f"{prefisso}_{dal}-{al}_{etichetta}.xlsx")
+    _scrivi_xlsx(percorso, chiavi_pivot, righe)
+    log(f"\nElenco fatture generato ({len(righe)} righe, "
+        f"{len(chiavi_pivot)} aliquote/nature).")
+    log(f"File: {percorso}")
+    return percorso
 
 
 # ─────────────────────────────────────────────────────────────────────────────
