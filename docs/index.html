@@ -51,6 +51,39 @@
       margin: 0 0 12px;
       font-weight: 800;
       letter-spacing: -.02em;
+      perspective: 700px;        /* profondità 3D per il tumbling del logo */
+    }
+
+    /* Logo: entra al caricamento come un dado lanciato che rotola e si assesta */
+    .logo-dice {
+      transform-origin: center;
+      animation: logoDiceIn 1.5s cubic-bezier(.2, .75, .3, 1) both;
+    }
+    @keyframes logoDiceIn {
+      0% {
+        opacity: 0;
+        transform: translateX(-220%) translateY(-45%)
+                   rotateZ(-1080deg) rotateX(720deg) rotateY(540deg) scale(.25);
+      }
+      30% { opacity: 1; }
+      55% {
+        opacity: 1;
+        transform: translateX(0) translateY(0)
+                   rotateZ(22deg) rotateX(-32deg) rotateY(-22deg) scale(1.18);
+      }
+      72% {
+        transform: rotateZ(-10deg) rotateX(12deg) rotateY(8deg) scale(.95);
+      }
+      86% {
+        transform: rotateZ(4deg) scale(1.04);
+      }
+      100% {
+        opacity: 1;
+        transform: none;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .logo-dice { animation: none; }
     }
     .hero p {
       max-width: 640px;
@@ -149,8 +182,8 @@
 <body>
 
   <header class="hero">
-    <span class="badge">Versione 0.02 alpha</span>
-    <h1><img src="logo.png" alt="Logo FeC-Plus" style="height:1em;width:auto;vertical-align:-0.15em"> FeC-Plus</h1>
+    <span class="badge">Versione 0.03 alpha</span>
+    <h1><img class="logo-dice" src="logo.png" alt="Logo FeC-Plus" style="height:1em;width:auto;vertical-align:-0.15em"> FeC-Plus</h1>
     <p>
       Scarica fatture elettroniche e corrispettivi dal portale
       <strong>«Fatture e Corrispettivi»</strong> dell'Agenzia delle Entrate,
@@ -160,7 +193,7 @@
       <a class="btn btn-primary" href="https://github.com/denvermotel/FeC-Plus">Vai al repository</a>
       <a class="btn btn-primary" href="guida.html">Guida di utilizzo</a>
       <a class="btn btn-ghost" href="changelog.html">Changelog</a>
-      <a class="btn btn-ghost" href="https://github.com/denvermotel/FeC-Plus?tab=MIT-1-ov-file">Licenza</a>
+      <a class="btn btn-ghost" href="https://raw.githubusercontent.com/denvermotel/FeC-Plus/refs/heads/master/LICENSE">Licenza</a>
     </div>
   </header>
 
@@ -175,24 +208,34 @@
           <p>Una sola autenticazione (SAM/ForgeRock + scelta dell'utenza di lavoro), senza password sulla riga di comando.</p>
         </div>
         <div class="card">
+          <div class="ico">🧑‍💼</div>
+          <h3>4 modalità di accesso</h3>
+          <p>Studio (delega cliente o cassetto proprio), Azienda, Libero professionista/Me stesso: un unico selettore comune a tutte le operazioni.</p>
+        </div>
+        <div class="card">
           <div class="ico">📥</div>
           <h3>Download fatture</h3>
-          <p>Emesse, ricevute, transfrontaliere e messe a disposizione, con i relativi metadati.</p>
+          <p>Emesse, ricevute, transfrontaliere e messe a disposizione, con i relativi metadati. Periodi lunghi spezzati e scaricati in automatico a blocchi.</p>
         </div>
         <div class="card">
           <div class="ico">📦</div>
           <h3>Richieste massive</h3>
-          <p>Fatture emesse/ricevute e corrispettivi: genera e invia l'XML all'Agenzia delle Entrate.</p>
+          <p>Fatture emesse/ricevute/messe a disposizione e corrispettivi: genera e invia l'XML all'Agenzia delle Entrate, e scarica i risultati delle richieste già inviate.</p>
+        </div>
+        <div class="card">
+          <div class="ico">👥</div>
+          <h3>Anagrafica deleghe</h3>
+          <p>Archivio locale dei clienti delegati, con import/export CSV compatibile con l'esportazione ufficiale dell'AdE.</p>
+        </div>
+        <div class="card">
+          <div class="ico">📊</div>
+          <h3>Esportazione Excel</h3>
+          <p>Elenco fatture o corrispettivi in un file .xlsx, con riepilogo per aliquota/natura IVA.</p>
         </div>
         <div class="card">
           <div class="ico">🧾</div>
           <h3>Bolli virtuali</h3>
-          <p>Generazione del modello F24 in PDF per il trimestre selezionato.</p>
-        </div>
-        <div class="card">
-          <div class="ico">👥</div>
-          <h3>Profili studio</h3>
-          <p>Opera come delega cliente, cassetto dello studio o «me stesso», scegliendo il profilo dalla GUI.</p>
+          <p>Riepilogo CSV (elenco A/B, importo, stato pagamento) per trimestre o anno intero.</p>
         </div>
         <div class="card">
           <div class="ico">💻</div>
@@ -206,7 +249,7 @@
   <section class="steps">
     <div class="wrap">
       <h2>Avvio rapido</h2>
-      <p class="sub">Richiede Python 3.12.</p>
+      <p class="sub">Su Windows, senza installare nulla: scarica <code>FeC-Plus.exe</code> dalla sezione Releases del repository ed eseguilo. In alternativa, da sorgente serve Python 3.12.</p>
       <ol class="steps-list">
         <li>Clona il repository e crea un ambiente virtuale.</li>
         <li>Installa le dipendenze con <code>pip install -r requirements.txt</code> e <code>playwright install chromium</code>.</li>
@@ -260,7 +303,7 @@ python fec_gui.py</pre>
     <p>
       Distribuito sotto licenza MIT ·
       <a href="https://github.com/denvermotel/FeC-Plus">Repository</a> ·
-      <a href="https://github.com/denvermotel/FeC-Plus?tab=MIT-1-ov-file">Licenza</a>
+      <a href="https://raw.githubusercontent.com/denvermotel/FeC-Plus/refs/heads/master/LICENSE">Licenza</a>
     </p>
     <p>
       Sviluppato da Giovanni Genna · fork di

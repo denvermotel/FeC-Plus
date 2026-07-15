@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# FeC-Plus — v0.02 alpha
+# FeC-Plus - v0.03 alpha
 """
-fec_cli.py — Interfaccia a riga di comando per FeC-Plus, SENZA GUI.
+fec_cli.py - Interfaccia a riga di comando per FeC-Plus, SENZA GUI.
 
 Wrapper: esegue il login al portale «Fatture e Corrispettivi» dell'AdE (via ade_auth) e
 scarica fatture/corrispettivi/bolli usando le funzioni di fec_download. La logica di
@@ -28,11 +28,13 @@ Esempi:
 
 from __future__ import annotations
 
-__version__ = "0.02 alpha"
+__version__ = "0.03 alpha"
 
 import argparse
 import os
 import sys
+
+import fec_deps
 
 # Output UTF-8 anche su console Windows (cp1252) per evitare UnicodeEncodeError sui
 # caratteri non-ASCII di help e log (« » → ✅ ❌ …).
@@ -51,7 +53,7 @@ def _add_date_range(sp: argparse.ArgumentParser, fmt: str) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fec_cli.py",
-        description="FeC-Plus — download da «Fatture e Corrispettivi» AdE, da riga di comando.",
+        description="FeC-Plus - download da «Fatture e Corrispettivi» AdE, da riga di comando.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--version", action="version", version=f"FeC-Plus {__version__}")
 
@@ -66,16 +68,24 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Nome della variabile d'ambiente da cui leggere la password")
     acc.add_argument("--cfstudio", default="",
                      help="CF dello studio incaricante (profili 1/2)")
-    acc.add_argument("--cf-cliente", default="", help="CF del cliente delegante")
+    acc.add_argument("--cf-cliente", default="",
+                     help="CF del cliente delegante, o dell'azienda per --profilo 4")
     acc.add_argument("--piva", default="", help="P.IVA dell'utenza di lavoro (massive/bolli)")
-    acc.add_argument("--profilo", type=int, choices=(1, 2, 3), default=1,
-                     help="1=studio→cliente, 2=cassetto studio, 3=me stesso")
+    acc.add_argument("--profilo", type=int, choices=(1, 2, 3, 4), default=1,
+                     help="1=studio→cliente, 2=cassetto studio, 3=me stesso/libero "
+                          "professionista, 4=azienda (ipotesi non verificata dal vivo)")
     acc.add_argument("--backend", choices=("requests", "browser"), default="requests",
                      help="Backend di login")
     acc.add_argument("--no-headless", dest="headless", action="store_false", default=True,
                      help="Mostra la finestra del browser (solo backend browser)")
     acc.add_argument("--dest", default=None,
                      help="Cartella di destinazione dei download (default: ./Download)")
+    acc.add_argument("--includi-scartate-pa", dest="escludi_scartate_pa",
+                     action="store_false", default=True,
+                     help="Include anche le fatture rifiutate dalla P.A. (default: escluse)")
+    acc.add_argument("--estrai-p7m", action="store_true", default=False,
+                     help="Estrae l'XML dai file firmati .p7m al posto dell'originale "
+                          "(richiede il pacchetto asn1crypto)")
     acc.add_argument("--dry-run", action="store_true",
                      help="Mostra cosa verrebbe eseguito, senza fare login né download")
 
@@ -102,42 +112,53 @@ def build_parser() -> argparse.ArgumentParser:
                                    help="Richiesta massiva ricevute (data emissione)"), "aaaa-mm-gg")
     _add_date_range(sub.add_parser("massive-ricevute-ricezione",
                                    help="Richiesta massiva ricevute (data ricezione)"), "aaaa-mm-gg")
+    _add_date_range(sub.add_parser("massive-disposizione",
+                                   help="Richiesta massiva fatture messe a disposizione"), "aaaa-mm-gg")
     _add_date_range(sub.add_parser("corrispettivi",
                                    help="Richiesta massiva corrispettivi"), "aaaa-mm-gg")
 
-    spb = sub.add_parser("bolli", help="Bolli virtuali → PDF F24")
-    spb.add_argument("--trimestre", required=True, choices=("1", "2", "3", "4"))
+    spb = sub.add_parser("bolli", help="Bolli virtuali → riepilogo CSV (elenco A/B, importo, stato pagamento)")
+    spb.add_argument("--trimestre", required=True, choices=("1", "2", "3", "4", "tutti"),
+                     help="Trimestre singolo, o 'tutti' per l'intero anno")
     spb.add_argument("--anno", required=True, help="Anno (aaaa)")
 
     return parser
 
 
-def _dispatch(args, auth, fd):
-    """Chiama la funzione di fec_download corrispondente al comando."""
-    c = args.comando
-    dest, cfcl, piva = args.dest, args.cf_cliente, args.piva
-    if c == "emesse":
-        return fd.scarica_emesse(auth, args.dal, args.al, cfcl, dest_dir=dest)
-    if c == "ricevute":
-        return fd.scarica_ricevute(auth, args.dal, args.al, cfcl,
-                                   tipo_data=args.tipo_data, dest_dir=dest)
-    if c == "transfrontaliere-emesse":
-        return fd.scarica_transfrontaliere_emesse(auth, args.dal, args.al, cfcl, dest_dir=dest)
-    if c == "transfrontaliere-ricevute":
-        return fd.scarica_transfrontaliere_ricevute(auth, args.dal, args.al, cfcl, dest_dir=dest)
-    if c == "messe-a-disposizione":
-        return fd.scarica_messe_a_disposizione(auth, args.dal, args.al, cfcl, dest_dir=dest)
-    if c == "massive-emesse":
-        return fd.richiesta_massiva_emesse(auth, args.dal, args.al, cfcl, piva, dest_dir=dest)
-    if c == "massive-ricevute-emissione":
-        return fd.richiesta_massiva_ricevute_emissione(auth, args.dal, args.al, cfcl, piva, dest_dir=dest)
-    if c == "massive-ricevute-ricezione":
-        return fd.richiesta_massiva_ricevute_ricezione(auth, args.dal, args.al, cfcl, piva, dest_dir=dest)
-    if c == "corrispettivi":
-        return fd.richiesta_corrispettivi(auth, args.dal, args.al, cfcl, piva, dest_dir=dest)
-    if c == "bolli":
-        return fd.scarica_bolli(auth, cfcl, piva, args.trimestre, args.anno, dest_dir=dest)
-    raise SystemExit(f"Comando sconosciuto: {c}")
+# Mappatura comando CLI → tipo di richiesta (chiavi del registro fec_queue.TIPI).
+_CMD_TIPO = {
+    "emesse": "emesse",
+    "ricevute": "ricevute",
+    "transfrontaliere-emesse": "trans_emesse",
+    "transfrontaliere-ricevute": "trans_ricevute",
+    "messe-a-disposizione": "messe_disposizione",
+    "massive-emesse": "massive_emesse",
+    "massive-ricevute-emissione": "massive_ricevute_emissione",
+    "massive-ricevute-ricezione": "massive_ricevute_ricezione",
+    "massive-disposizione": "massive_disposizione",
+    "corrispettivi": "corrispettivi",
+    "bolli": "bolli",
+}
+
+
+def _dispatch(args, auth, fq):
+    """Instrada il comando a fec_queue.esegui_richiesta (spezzettamento periodi)."""
+    tipo = _CMD_TIPO.get(args.comando)
+    if tipo is None:
+        raise SystemExit(f"Comando sconosciuto: {args.comando}")
+    spec = fq.TIPI[tipo]
+    kw = {"cf_cliente": args.cf_cliente, "dest_dir": args.dest}
+    if tipo == "ricevute":
+        kw["tipo_data"] = args.tipo_data
+    if spec.kind == "download":
+        kw["escludi_scartate_pa"] = args.escludi_scartate_pa
+        kw["estrai_p7m"] = args.estrai_p7m
+    if spec.kind == "invio":
+        kw["piva"] = args.piva
+    if tipo == "bolli":
+        kw.update(piva=args.piva, trimestre=args.trimestre, anno=args.anno)
+    return fq.esegui_richiesta(auth, tipo, dal=getattr(args, "dal", None),
+                               al=getattr(args, "al", None), **kw)
 
 
 def _risolvi_password(args) -> str:
@@ -159,14 +180,35 @@ def main(argv=None) -> int:
               f"backend={args.backend} headless={args.headless}")
         print(f"  soggetti: cf_cliente={args.cf_cliente!r} piva={args.piva!r} "
               f"cfstudio={args.cfstudio!r}")
-        for k in ("dal", "al", "tipo_data", "trimestre", "anno", "dest"):
+        for k in ("dal", "al", "tipo_data", "trimestre", "anno", "dest",
+                  "escludi_scartate_pa", "estrai_p7m"):
             if hasattr(args, k):
                 print(f"  {k} = {getattr(args, k)!r}")
         print("  (login e download NON eseguiti)")
         return 0
 
+    # Controllo dipendenze all'avvio.
+    missing = fec_deps.find_missing()
+    if missing["core"]:
+        print("❌ Dipendenze richieste mancanti: " + ", ".join(missing["core"]),
+              file=sys.stderr)
+        print("   Installa con:  " + fec_deps.pip_install_hint(missing["core"]),
+              file=sys.stderr)
+        return 3
+    if args.backend == "browser" and "playwright" in missing["browser"]:
+        print("❌ Backend «browser» richiesto ma Playwright non è installato.", file=sys.stderr)
+        print("   Usa «--backend requests» oppure installa Playwright:", file=sys.stderr)
+        print("   " + fec_deps.pip_install_hint(["playwright"])
+              + " && python -m playwright install chromium", file=sys.stderr)
+        return 3
+    if args.estrai_p7m and missing["p7m"]:
+        print("❌ «--estrai-p7m» richiesto ma «asn1crypto» non è installato.", file=sys.stderr)
+        print("   Installa con:  " + fec_deps.pip_install_hint(missing["p7m"]),
+              file=sys.stderr)
+        return 3
+
     from ade_auth import autentica, Creds, AuthError
-    import fec_download as fd
+    import fec_queue as fq
 
     creds = Creds(nomeutente=args.cf, pin=args.pin, password=password,
                   cfstudio=args.cfstudio, cf_cliente=args.cf_cliente,
@@ -177,10 +219,10 @@ def main(argv=None) -> int:
         print(f"\n❌ Login fallito allo step «{exc.step}»: {exc.dettaglio}", file=sys.stderr)
         return 2
 
-    print(f"\n✅ Login OK — backend {auth.backend}. Avvio «{args.comando}»…\n")
+    print(f"\n✅ Login OK - backend {auth.backend}. Avvio «{args.comando}»...\n")
     try:
-        _dispatch(args, auth, fd)
-    except fd.DownloadError as exc:
+        _dispatch(args, auth, fq)
+    except fq.DownloadError as exc:
         print(f"\n❌ Operazione non riuscita: {exc}", file=sys.stderr)
         return 1
     print("\n[Completato]")

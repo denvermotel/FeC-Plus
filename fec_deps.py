@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# FeC-Plus — v0.03 dev
+# FeC-Plus - v0.03 alpha
 """
-fec_deps.py — Controllo dipendenze (G.8), punto unico riusabile da GUI e CLI.
+fec_deps.py - Controllo dipendenze, punto unico riusabile da GUI e CLI.
 
 Verifica che i pacchetti di `requirements.txt` siano installati e costruisce i comandi
 pip per installarli. La logica è qui sola per non duplicarla tra `fec_gui.py` e `fec_cli.py`.
 
 Ruoli delle dipendenze:
   - core    : sempre richieste (login + persistenza credenziali).
-  - browser : opzionali, servono solo al backend «browser» (Playwright) / SPID-CIE (C.7).
-              La loro assenza NON blocca il backend leggero «requests» (C.1).
-  - gui     : opzionali, solo per la GUI desktop; hanno già un fallback (es. tkcalendar → G.2)
-              e non servono alla CLI.
+  - browser : opzionali, servono solo al backend «browser» (Playwright) / SPID-CIE.
+              La loro assenza NON blocca il backend leggero «requests».
+  - gui     : opzionali, solo per la GUI desktop; hanno già un fallback (es. tkcalendar
+              assente = calendario testuale) e non servono alla CLI.
   - p7m     : opzionale, serve solo se l'utente attiva «Estrai p7m» nel download; non
               installata di default (install_commands) per restare leggeri.
-  - excel   : opzionale, serve solo all'export Excel della tab Utility (C.9/G.6,
-              fec_utility.py); non installata di default, come p7m.
+  - excel   : opzionale, serve solo all'export Excel della tab Utility
+              (fec_utility.py); non installata di default, come p7m.
 """
 
 from __future__ import annotations
 
-__version__ = "0.03 dev"
+__version__ = "0.03 alpha"
 
 import importlib.util
 import sys

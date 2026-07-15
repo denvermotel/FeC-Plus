@@ -4,4 +4,4 @@ playwright
 cryptography
 tkcalendar
 asn1crypto  # opzionale: solo per "Estrai p7m" nel download standard
-openpyxl    # opzionale: solo per l'export Excel della tab Utility (C.9/G.6)
+openpyxl    # opzionale: solo per l'export Excel della tab Utility

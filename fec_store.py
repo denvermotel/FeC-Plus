@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# FeC-Plus — v0.02 alpha
+# FeC-Plus - v0.03 alpha
 """
-fec_store.py — Persistenza separata di CREDENZIALI (cifrate) e PREFERENZE (in chiaro).
+fec_store.py - Persistenza separata di CREDENZIALI (cifrate) e PREFERENZE (in chiaro).
 
-Due file accanto al modulo (C.3):
+Due file accanto al modulo:
   - fec_credentials.dat : JSON {cf, pin, cfstudio} cifrato con Fernet.
   - fec_settings.json   : preferenze NON sensibili (login_backend, browser_headless,
                           std_profilo, std_destdir, salva_credenziali, …).
@@ -18,24 +18,33 @@ codice sorgente. La password Entratel non viene comunque mai salvata.
 
 from __future__ import annotations
 
-__version__ = "0.02 alpha"
+__version__ = "0.03 alpha"
 
 import base64
 import json
 import os
+import sys
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+# Eseguibile PyInstaller: credenziali e impostazioni accanto all'exe (persistenti),
+# non nella cartella temporanea del bundle. Da sorgente: accanto al modulo.
+if getattr(sys, "frozen", False):
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CRED_FILE = os.path.join(SCRIPT_DIR, "fec_credentials.dat")
 SETTINGS_FILE = os.path.join(SCRIPT_DIR, "fec_settings.json")
 
 # Campi sensibili (cifrati) vs preferenze (in chiaro).
 CRED_KEYS = ("cf", "pin", "cfstudio")
-SETTINGS_KEYS = ("login_backend", "browser_headless", "std_profilo", "std_destdir",
-                 "salva_credenziali", "cartelle_documenti")
+SETTINGS_KEYS = ("login_backend", "browser_headless", "modalita",
+                 "std_destdir", "salva_credenziali", "cartelle_documenti", "console_sash",
+                 "deleghe_no_update", "std_escludi_scartate_pa", "std_estrai_p7m",
+                 "std_includi_trans", "std_includi_disposizione",
+                 "cred_espanse", "estrai_zip_risultati_massivi")
 
 # Segreto "leggero" incluso nel codice → cifratura portabile (nessun OS/keyring), ma
 # obfuscation-grade. Cambiarlo invalida i file credenziali già salvati.

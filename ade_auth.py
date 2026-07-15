@@ -1,6 +1,6 @@
-# FeC-Plus — v0.02 alpha
+# FeC-Plus - v0.03 alpha
 """
-ade_auth.py — Autenticazione al portale AdE "Fatture e Corrispettivi" (nuovo login).
+ade_auth.py - Autenticazione al portale AdE "Fatture e Corrispettivi".
 
 L'Agenzia delle Entrate ha sostituito il vecchio login Liferay
 (ivaservizi.../portale/home, campi _58_login/_58_pin) con il portale
@@ -15,11 +15,12 @@ Campi credenziali Entratel/Fisconline (tab "Fisconline/Entratel", #tab-4):
 
 Dopo il login si passa dal wizard di scelta utenza di lavoro:
     https://ivaservizi.agenziaentrate.gov.it/instr/InstradamentofcWeb/wizard
-  radio `tipoincaricante`:
-    incaricoDiretto       -> "Me stesso"            (profilo 2)
-    incaricoDelega        -> "Delega diretta"       (profilo 1, default)
-    incaricoIntermediario -> "Studio / intermediario" (profilo 3)
-  select `incaricante`, input `cfDelegante` (CF cliente), bottone "Procedi".
+  radio `tipoincaricante` (vedi `_PROFILO_TIPOINCARICANTE`):
+    incaricoDelega        -> Studio, delega diretta di un cliente (profilo 1, default)
+    incaricoDiretto       -> Studio, cassetto proprio o "Me stesso" (profili 2/3)
+    incaricoIntermediario -> Azienda, legale rappresentante/incaricato (profilo 4,
+                              ipotesi non ancora verificata dal vivo)
+  select `incaricante`, input `cfDelegante` (CF cliente/azienda), bottone "Procedi".
 
 Espone una sola API:
 
@@ -28,14 +29,14 @@ Espone una sola API:
 con due backend:
   - "browser"  : Playwright Chromium (affidabile, gestisce la SPA/JS; default).
   - "requests" : login via API JSON /api/login/telematico + scelta utenza via API
-                 REST di instradamento (leggero, senza browser; vedi C.1).
+                 REST di instradamento (leggero, senza browser).
 
 In caso di problema solleva AuthError(step, dettaglio).
 """
 
 from __future__ import annotations
 
-__version__ = "0.02 alpha"
+__version__ = "0.03 alpha"
 
 import json
 import re
@@ -44,9 +45,33 @@ from datetime import datetime, timezone
 from urllib.parse import quote
 
 import requests
-from requests.packages.urllib3.exceptions import InsecureRequestWarning
+import urllib3
+from requests.adapters import HTTPAdapter
+from urllib3.exceptions import InsecureRequestWarning
+from urllib3.util.retry import Retry
 
-requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+urllib3.disable_warnings(InsecureRequestWarning)
+
+
+def _nuova_sessione() -> requests.Session:
+    """
+    Sessione `requests` con retry automatico sugli errori di connessione.
+
+    L'AdE, su sessioni lunghe (es. download annuale spezzato in più blocchi),
+    talvolta chiude lato server una connessione keep-alive riutilizzata
+    ('RemoteDisconnected'); senza un adapter di retry questo fa fallire la
+    richiesta anche se un secondo tentativo andrebbe a buon fine.
+    """
+    s = requests.Session()
+    retry = Retry(
+        total=3, connect=3, read=3, backoff_factor=1,
+        status_forcelist=(502, 503, 504),
+        allowed_methods=frozenset(["GET", "POST"]),
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    s.mount("https://", adapter)
+    s.mount("http://", adapter)
+    return s
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -108,12 +133,17 @@ _UA = (
 #   4) "Procedi" -> pagina "Riepilogo e conferma" -> "Conferma".
 PROFILO_STUDIO_CLIENTE = 1   # studio -> cliente (delegato per singolo soggetto)
 PROFILO_STUDIO_CASSETTO = 2  # studio -> cassetto dello studio (incaricato)
-PROFILO_ME_STESSO = 3        # opero sul mio CF
+PROFILO_ME_STESSO = 3        # opero sul mio CF (o libero professionista)
+PROFILO_AZIENDA = 4          # azienda: uso lo stesso meccanismo del cassetto studio
+                             # (incaricato/incaricoDiretto), con l'incarico cercato
+                             # per il CF dell'azienda invece che per il CF studio
+                             # (confermato con una cattura HAR dal vivo)
 
 _PROFILO_TIPOINCARICANTE = {
     PROFILO_STUDIO_CLIENTE: "incaricoDelega",
     PROFILO_STUDIO_CASSETTO: "incaricoDiretto",
     PROFILO_ME_STESSO: "incaricoDiretto",
+    PROFILO_AZIENDA: "incaricoDiretto",
 }
 
 
@@ -150,9 +180,9 @@ class Creds:
     pin: str                 # IDToken3
     password: str            # IDToken2
     cfstudio: str = ""       # CF/P.IVA dello studio (incaricante), per profili 2/3
-    cf_cliente: str = ""     # CF del cliente delegante (profili 1/3)
+    cf_cliente: str = ""     # CF del cliente delegante (profilo 1) o dell'azienda (profilo 4)
     piva: str = ""           # P.IVA dell'utenza di lavoro da attivare
-    profilo: int = 1         # 1=Delega diretta  2=Me stesso  3=Studio associato
+    profilo: int = 1         # 1=Studio->cliente  2=Studio->cassetto  3=Me stesso  4=Azienda
 
 
 @dataclass
@@ -165,6 +195,10 @@ class AuthResult:
     utenza: str = ""
     backend: str = ""
     note: list = field(default_factory=list)
+    piva: str = ""                                  # P.IVA dell'utenza di lavoro attiva
+    piva_disponibili: list = field(default_factory=list)  # elenco P.IVA del CF (PIva[])
+    denominazione: str = ""                         # denominazione dell'utenza di lavoro
+    conservazione: bool = False                     # adesione conservazione dati fattura
 
 
 class AuthError(RuntimeError):
@@ -236,7 +270,9 @@ def _accetta_disclaimer(s: requests.Session, headers: dict) -> None:
 
 
 def _finalizza(s: requests.Session, backend: str, utenza: str,
-               note: list | None = None) -> AuthResult:
+               note: list | None = None, piva: str = "",
+               piva_disponibili: list | None = None,
+               denominazione: str = "", conservazione: bool = False) -> AuthResult:
     """Step finale comune: token B2B, header, disclaimer."""
     xb2bcookie, xtoken = _ottieni_token(s)
     headers = _build_headers(xb2bcookie, xtoken)
@@ -245,6 +281,8 @@ def _finalizza(s: requests.Session, backend: str, utenza: str,
     return AuthResult(
         session=s, headers=headers, xb2bcookie=xb2bcookie, xtoken=xtoken,
         utenza=utenza or "", backend=backend, note=note or [],
+        piva=piva or "", piva_disponibili=piva_disponibili or [],
+        denominazione=denominazione or "", conservazione=bool(conservazione),
     )
 
 
@@ -254,9 +292,10 @@ def _finalizza(s: requests.Session, backend: str, utenza: str,
 
 def _autentica_browser(creds: Creds, headless: bool = False,
                         timeout_ms: int = 180_000,
-                        log=print, capture_dir: str | None = None) -> AuthResult:
+                        log=print, capture_dir: str | None = None,
+                        scegli_piva=None) -> AuthResult:
     try:
-        from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+        from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout  # type: ignore
     except ImportError:
         raise AuthError(
             "dipendenze",
@@ -321,7 +360,8 @@ def _autentica_browser(creds: Creds, headless: bool = False,
             # 4) Wizard scelta utenza di lavoro (best-effort; NON forzo navigazioni:
             #    forzare /cons/cons-web prima della conferma fa rimbalzare al login).
             log("Configuro l'utenza di lavoro...")
-            _wizard_browser(page, creds, log)
+            piva_scelta, piva_disponibili = _wizard_browser(
+                page, creds, log, headless=headless, scegli_piva=scegli_piva)
 
             # 5) Attendo l'arrivo naturale su Fatture & Corrispettivi (anche se
             #    completi a mano la scelta utenza nella finestra del browser).
@@ -339,7 +379,16 @@ def _autentica_browser(creds: Creds, headless: bool = False,
 
     if har_path:
         log(f"\n📦 Cattura login salvata:\n   HAR: {har_path}\n   LOG: {log_path}")
-    return _finalizza(s, "browser", creds.piva, note)
+    piva_finale = piva_scelta or creds.piva
+    # denominazione ricavabile dall'opzione P.IVA scelta nella tendina (PIva[]);
+    # conservazione non è disponibile per questa via (la ricava fec_anagrafica).
+    denom = ""
+    for p in piva_disponibili:
+        if str((p or {}).get("piva", "")).strip() == piva_finale:
+            denom = str((p or {}).get("denominazione", "") or "").strip()
+            break
+    return _finalizza(s, "browser", piva_finale, note, piva=piva_finale,
+                      piva_disponibili=piva_disponibili, denominazione=denom)
 
 
 def _seleziona_tab_entratel(page, log) -> None:
@@ -349,7 +398,7 @@ def _seleziona_tab_entratel(page, log) -> None:
     può intercettare i click. Si usano attese + chiusura banner + click multipli
     (normale, force, dispatch JS).
     """
-    from playwright.sync_api import TimeoutError as PWTimeout
+    from playwright.sync_api import TimeoutError as PWTimeout  # type: ignore
 
     _chiudi_banner(page)
 
@@ -379,10 +428,11 @@ def _seleziona_tab_entratel(page, log) -> None:
 
         tab = _tab_locator()
         if tab is not None:
+            tab_loc = tab  # binding non-None: le lambda lo catturano senza il tipo Optional
             for clicker in (
-                lambda: tab.click(timeout=3000),
-                lambda: tab.click(timeout=3000, force=True),
-                lambda: tab.dispatch_event("click"),
+                lambda: tab_loc.click(timeout=3000),
+                lambda: tab_loc.click(timeout=3000, force=True),
+                lambda: tab_loc.dispatch_event("click"),
             ):
                 try:
                     tab.scroll_into_view_if_needed(timeout=2000)
@@ -472,18 +522,153 @@ def _estrai_errore_login(page) -> str:
     return ""
 
 
-def _wizard_browser(page, creds: Creds, log) -> None:
+_RE_PIVA = re.compile(r"\d{11}")
+
+
+def _trova_select_piva(page):
     """
-    Wizard "Configura l'utenza di lavoro" — è MULTI-STEP (form separati, ognuno con il
+    Trova nel DOM la tendina (native `<select>`) di scelta P.IVA dello step corrente.
+    La distingue da `#incaricante`: è un select VISIBILE, diverso da #incaricante, con
+    opzioni che contengono una P.IVA (11 cifre) o con id/name che cita "piva".
+    Ritorna `(locator_select, opzioni)` con opzioni = [(value, testo), ...], o (None, []).
+    """
+    try:
+        selects = page.locator("select")
+        n = selects.count()
+    except Exception:
+        return None, []
+    for i in range(n):
+        s = selects.nth(i)
+        try:
+            if not s.is_visible():
+                continue
+        except Exception:
+            continue
+        sid = (s.get_attribute("id") or "")
+        sname = (s.get_attribute("name") or "")
+        if sid == "incaricante":
+            continue
+        opzioni: list[tuple[str, str]] = []
+        try:
+            opts = s.locator("option")
+            for j in range(opts.count()):
+                o = opts.nth(j)
+                testo = (o.inner_text() or "").strip()
+                val = (o.get_attribute("value") or "").strip()
+                opzioni.append((val, testo))
+        except Exception:
+            continue
+        blob = " ".join(f"{v} {t}" for v, t in opzioni)
+        if _RE_PIVA.search(blob) or "piva" in sid.lower() or "piva" in sname.lower():
+            return s, opzioni
+    return None, []
+
+
+def _piva_da_opzioni(opzioni: list) -> list:
+    """Estrae [{piva, denominazione, _value, _label}] dalle opzioni della tendina,
+    scartando i placeholder ("Seleziona…") privi di P.IVA."""
+    out = []
+    for val, testo in opzioni:
+        m = _RE_PIVA.search(val) or _RE_PIVA.search(testo)
+        if not m:
+            continue
+        piva = m.group(0)
+        denom = _RE_PIVA.sub("", testo).strip(" -–—\t·|")
+        out.append({"piva": piva, "denominazione": denom, "_value": val, "_label": testo})
+    return out
+
+
+def _seleziona_opzione_piva(select_loc, opzioni: list, target: str) -> bool:
+    """Seleziona nella tendina l'opzione corrispondente a `target` (P.IVA): prima per
+    value, poi per etichetta. Ritorna True se selezionata."""
+    for val, testo in opzioni:
+        if target and (target in val or target in testo):
+            for tentativo in (lambda: select_loc.select_option(value=val),
+                              lambda: select_loc.select_option(label=testo)):
+                try:
+                    tentativo()
+                    return True
+                except Exception:
+                    continue
+    return False
+
+
+def _gestisci_piva_browser(page, creds: Creds, headless: bool, scegli_piva, log,
+                           stato: dict) -> str:
+    """
+    Gestisce lo step con la tendina di scelta P.IVA nel wizard browser (multi-P.IVA).
+
+    Legge le P.IVA dalla tendina e decide quale attivare:
+      - P.IVA indicata dall'utente (`creds.piva`) → selezionata direttamente;
+      - una sola P.IVA → automatica;
+      - più P.IVA senza indicazione: se headless si chiede con `scegli_piva` (popup),
+        altrimenti (finestra visibile) si lascia scegliere a mano nel browser.
+    Ritorna: "none" (nessuna tendina qui), "selected" (scelta fatta, si può avanzare),
+    "manual" (scelta lasciata all'utente nel browser: non avanzare in automatico).
+    Aggiorna `stato['disponibili']` e `stato['scelta']`.
+    """
+    select_loc, opzioni = _trova_select_piva(page)
+    if select_loc is None:
+        return "none"
+    disponibili = _piva_da_opzioni(opzioni)
+    lista = [d["piva"] for d in disponibili]
+    if not lista:
+        return "none"
+    stato["disponibili"] = disponibili
+    log(f"Menù P.IVA rilevato: {lista}")
+
+    target = ""
+    if creds.piva:
+        target = creds.piva
+        if target not in lista:
+            log(f"⚠️  La P.IVA indicata {target} non è tra quelle del menù {lista}; "
+                "la seleziono comunque se presente.")
+    elif len(lista) == 1:
+        target = lista[0]
+    elif headless:
+        # Finestra non visibile: l'utente non può usare la tendina → popup.
+        if scegli_piva is not None:
+            try:
+                target = (scegli_piva(list(disponibili)) or "").strip()
+            except Exception as exc:
+                log(f"⚠️  Selettore P.IVA fallito ({exc}).")
+        if not target:
+            target = lista[0]
+            log(f"⚠️  Nessuna P.IVA scelta: uso la prima ({target}).")
+    else:
+        # Finestra visibile: lascia scegliere a mano nella tendina del browser.
+        log("ℹ️  Più P.IVA: seleziona quella desiderata nel menù a tendina del browser.")
+        return "manual"
+
+    if _seleziona_opzione_piva(select_loc, opzioni, target):
+        stato["scelta"] = target
+        log(f"P.IVA selezionata nel menù: {target}")
+        return "selected"
+    log(f"⚠️  Non sono riuscito a selezionare {target} nella tendina.")
+    return "selected" if headless else "manual"
+
+
+def _wizard_browser(page, creds: Creds, log, headless: bool = False,
+                    scegli_piva=None) -> tuple[str, list]:
+    """
+    Wizard "Configura l'utenza di lavoro": è MULTI-STEP (form separati, ognuno con il
     suo 'Procedi'). Procede a ciclo gestendo, su ciascuna schermata:
       - select #incaricante (studio): il VALORE è un JSON, si seleziona per ETICHETTA
         (es. "12345678901-000");
       - scelta "per chi operare" (Incaricato / Delegato per singolo soggetto);
       - input #cfDelegante (CF del cliente);
+      - tendina di scelta P.IVA quando il CF ne ha più d'una (vedi _gestisci_piva_browser);
       - bottoni Procedi / Conferma.
-    Salva il DOM di ogni step in _debug_wizard_stepN.html per rifinire i selettori.
     Se incontra uno step che non sa gestire, si ferma e lascia completare a mano.
+
+    Ritorna `(piva_scelta, piva_disponibili)`: la P.IVA attivata (letta/selezionata dalla
+    tendina) e l'elenco delle P.IVA del CF. In scelta manuale, `piva_scelta` resta "".
     """
+    stato: dict = {"scelta": "", "disponibili": []}
+
+    def _esito():
+        return stato["scelta"], stato["disponibili"]
+
     # La pagina è una SPA: il markup di TUTTI gli step è sempre nel DOM (Conferma
     # compresa), mostrato/nascosto via CSS. Quindi si agisce SOLO su ciò che è VISIBILE
     # e si avanza cliccando il bottone primario visibile (Procedi o, al riepilogo, Conferma).
@@ -496,12 +681,12 @@ def _wizard_browser(page, creds: Creds, log) -> None:
         except Exception:
             url = ""
         if _accesso_completato(url):
-            return  # accesso completato (F&C o dashboard post-wizard)
+            return _esito()  # accesso completato (F&C o dashboard post-wizard)
 
         try:
             page.wait_for_function(has_primary, timeout=15_000)
         except Exception:
-            return  # nessun wizard (utenza unica) o già oltre
+            return _esito()  # nessun wizard (utenza unica) o già oltre
 
         conferma = _btn_visibile(page, "Conferma")
         procedi = _btn_visibile(page, "Procedi")
@@ -513,13 +698,18 @@ def _wizard_browser(page, creds: Creds, log) -> None:
                 log("Riepilogo confermato.")
             except Exception:
                 log("⚠️  Bottone 'Conferma' non cliccabile: confermalo nel browser.")
-                return
+                return _esito()
         else:
             sel = page.locator("#incaricante")
             incaricante_vis = sel.count() and sel.first.is_visible()
             if incaricante_vis:
-                # form-step-2: studio + "per chi operare" + CF cliente.
-                _select_incaricante(page, creds.cfstudio, log)
+                # form-step-2: studio/azienda + "per chi operare" + CF cliente.
+                # Per il profilo Azienda l'incarico va cercato per il CF dell'azienda
+                # (cf_cliente), non per il CF studio: è l'azienda stessa ad aver dato
+                # l'incarico all'utente collegato.
+                cf_incarico = (creds.cf_cliente if creds.profilo == PROFILO_AZIENDA
+                              else creds.cfstudio)
+                _select_incaricante(page, cf_incarico, log)
                 try:
                     page.wait_for_selector('input[name="tipoincaricante"]', timeout=4000)
                 except Exception:
@@ -534,9 +724,18 @@ def _wizard_browser(page, creds: Creds, log) -> None:
                         page.locator("#cfDelegante").first.fill(creds.cf_cliente)
                     except Exception:
                         pass
+                # la tendina P.IVA può popolarsi nello stesso form dopo il CF delegante
+                if _gestisci_piva_browser(page, creds, headless, scegli_piva, log, stato) \
+                        == "manual":
+                    return _esito()
             else:
-                # form-step-1: tipo utenza "Me stesso" / "Incaricato".
-                _scegli_tipoutenza(page, creds.profilo)
+                # step "tipo utenza" OPPURE step con la tendina di scelta P.IVA.
+                esito_piva = _gestisci_piva_browser(page, creds, headless, scegli_piva,
+                                                    log, stato)
+                if esito_piva == "manual":
+                    return _esito()
+                if esito_piva == "none":
+                    _scegli_tipoutenza(page, creds.profilo)
 
             if not _click_btn(page, ("Procedi", "Avanti", "Prosegui")):
                 if conferma is not None:
@@ -544,12 +743,12 @@ def _wizard_browser(page, creds: Creds, log) -> None:
                         conferma.click()
                     except Exception:
                         log("⚠️  Impossibile avanzare: completa lo step nel browser.")
-                        return
+                        return _esito()
                 else:
                     _dump_html(page, f"_debug_wizard_step{step}.html")
                     log("⚠️  Nessun bottone per avanzare: completa lo step nel browser "
                         "(salvato _debug_wizard_step%d.html)." % step)
-                    return
+                    return _esito()
 
         try:
             page.wait_for_load_state("networkidle", timeout=8000)
@@ -561,6 +760,8 @@ def _wizard_browser(page, creds: Creds, log) -> None:
             page.wait_for_load_state("networkidle", timeout=12_000)
         except Exception:
             page.wait_for_timeout(1500)
+
+    return _esito()
 
 
 def _select_incaricante(page, cfstudio: str, log) -> bool:
@@ -625,6 +826,7 @@ def _scegli_per_chi_operare(page, profilo: int) -> bool:
     testo = {
         PROFILO_STUDIO_CLIENTE: r"delegato per singolo soggetto",
         PROFILO_STUDIO_CASSETTO: r"^\s*incaricato\s*$",
+        PROFILO_AZIENDA: r"^\s*incaricato\s*$",
         PROFILO_ME_STESSO: r"me stesso",
     }.get(profilo)
     if testo:
@@ -698,7 +900,7 @@ def _dump_html(page, filename: str) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Cattura traffico login (capture-first per C.1: ricostruzione del flusso requests)
+# Cattura traffico login (per ricostruire il flusso del backend requests)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _capture_paths(capture_dir: str) -> tuple[str, str]:
@@ -758,12 +960,145 @@ def _attach_network_log(page, log_path: str, log) -> None:
 
     page.on("request", on_request)
     page.on("response", on_response)
-    _scrivi(f"# Cattura login AdE — {datetime.now().isoformat()}")
+    _scrivi(f"# Cattura login AdE - {datetime.now().isoformat()}")
+
+
+def cattura_har_navigazione(nomeutente: str, pin: str, password: str,
+                            capture_dir: str = "_materiale",
+                            prefisso: str = "capture_debug", hint: str = "",
+                            log=print) -> tuple[str, str]:
+    """
+    Cattura HAR a navigazione libera (strumento investigativo generico, usato
+    per scoprire endpoint AdE non ancora noti).
+
+    Apre Chromium VISIBILE con registrazione HAR attiva, precompila (best-effort)
+    il login Entratel e poi lascia la navigazione ALL'UTENTE: completare il login,
+    l'eventuale scelta utenza e visitare le pagine da tracciare. La cattura termina
+    **chiudendo il browser**. Ritorna (har_path, log_path).
+
+    `prefisso` distingue i file per scenario d'uso (es. "capture_deleghe"); `hint`,
+    se dato, è scritto come riga guida in testa al file di log (es. l'URL da
+    raggiungere per l'investigazione in corso).
+
+    Differenza dalla «🎥 Cattura login» di Test Login (`_attach_network_log` sopra):
+    là il browser si chiude da solo a login completato e il log filtra solo il
+    traffico di autenticazione; qui si registra TUTTO il traffico
+    `agenziaentrate.gov.it` finché il browser resta aperto. ⚠️ HAR e log contengono
+    credenziali/dati reali: restano in `_materiale/` (fuori da Git), non condividerli.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        raise AuthError("dipendenze",
+                        "La cattura HAR richiede Playwright: pip install playwright "
+                        "e poi «playwright install chromium».")
+    import os
+
+    os.makedirs(capture_dir, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = os.path.join(capture_dir, f"{prefisso}_{ts}")
+    har_path, log_path = base + ".har", base + ".log"
+
+    def _scrivi(riga: str) -> None:
+        try:
+            with open(log_path, "a", encoding="utf-8") as fh:
+                fh.write(riga + "\n")
+        except Exception:
+            pass
+
+    def _rilevante(url: str) -> bool:
+        # Tutto il traffico AdE, esclusi gli asset statici che affollerebbero il log
+        # (nell'HAR c'è comunque tutto).
+        if "agenziaentrate.gov.it" not in url:
+            return False
+        return not url.lower().split("?")[0].endswith(
+            (".js", ".css", ".png", ".gif", ".jpg", ".svg", ".woff", ".woff2", ".ico"))
+
+    def _attach_log_completo(page) -> None:
+        def on_request(req):
+            try:
+                if not _rilevante(req.url):
+                    return
+                riga = f"→ {req.method} {req.url}"
+                try:
+                    post = req.post_data
+                except Exception:
+                    post = None
+                if post:
+                    riga += f"\n    body: {post}"
+                _scrivi(riga)
+            except Exception:
+                pass
+
+        def on_response(resp):
+            try:
+                if _rilevante(resp.url):
+                    ct = resp.headers.get("content-type", "")
+                    _scrivi(f"← {resp.status} {resp.url}  [{ct}]")
+            except Exception:
+                pass
+
+        page.on("request", on_request)
+        page.on("response", on_response)
+
+    _scrivi(f"# Cattura navigazione AdE - {datetime.now().isoformat()}")
+    if hint:
+        _scrivi(f"# {hint}")
+    log(f"Cattura traffico ATTIVA → {har_path}")
+
+    with sync_playwright() as p:
+        try:
+            browser = p.chromium.launch(headless=False)
+        except Exception as exc:
+            raise AuthError("browser", f"Impossibile avviare Chromium ({exc}). "
+                            "Esegui: playwright install chromium")
+        context = browser.new_context(user_agent=_UA, ignore_https_errors=True,
+                                      record_har_path=har_path, record_har_mode="full",
+                                      record_har_content="embed")
+        try:
+            page = context.new_page()
+            page.set_default_timeout(30_000)
+            _attach_log_completo(page)
+            context.on("page", _attach_log_completo)   # anche pagine/tab aperte dopo
+
+            log("Apro la pagina di login (compilazione campi best-effort)...")
+            page.goto(SAM_LOGIN_URL, wait_until="domcontentloaded")
+            try:
+                _seleziona_tab_entratel(page, log)
+                page.fill("#username-fo-ent", nomeutente)
+                page.fill("#password-fo-ent-1", password)
+                page.fill("#pin-fo-ent", pin)
+                log("Credenziali precompilate: premi tu il pulsante di accesso.")
+            except Exception:
+                log("⚠️  Precompilazione non riuscita: inserisci le credenziali a mano.")
+
+            if hint:
+                log(f"👉 {hint}")
+            log("Naviga liberamente. CHIUDI IL BROWSER per terminare e salvare la cattura.")
+            try:
+                while context.pages:
+                    context.pages[0].wait_for_timeout(500)
+            except Exception:
+                pass                        # browser chiuso dall'utente
+        finally:
+            # context.close() prima di browser.close() per flushare l'HAR su disco.
+            try:
+                context.close()
+            except Exception:
+                pass
+            try:
+                browser.close()
+            except Exception:
+                pass
+
+    log(f"\n📦 Cattura salvata:\n   HAR: {har_path}\n   LOG: {log_path}")
+    log("⚠️  I file contengono credenziali/dati reali: non condividerli.")
+    return har_path, log_path
 
 
 def _session_da_browser(context) -> requests.Session:
     """Costruisce una requests.Session con i cookie del browser."""
-    s = requests.Session()
+    s = _nuova_sessione()
     s.headers.update({"User-Agent": _UA, "Connection": "keep-alive"})
     for c in context.cookies():
         s.cookies.set(c["name"], c["value"],
@@ -776,16 +1111,16 @@ def _session_da_browser(context) -> requests.Session:
 # Backend REQUESTS (ForgeRock, best-effort)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _autentica_requests(creds: Creds, log=print) -> AuthResult:
+def _autentica_requests(creds: Creds, log=print, scegli_piva=None) -> AuthResult:
     """
-    Login "solo requests" ricostruito dal traffico reale (cattura HAR 2026-06-19):
+    Login "solo requests" ricostruito dal traffico reale del portale:
       1) POST {IAMPE}/api/login/telematico con JSON {username,password,pin} → cookie SSO.
       2) bootstrap della sessione di instradamento (portale → InstradamentofcWeb/home).
       3) wizard scelta utenza via API REST (initLight/wizardTemplate/procediWizard/
          setUserChoice), che attiva l'utenza di lavoro.
       4) token B2B/header (comune al backend browser).
     """
-    s = requests.Session()
+    s = _nuova_sessione()
     s.headers.update({"User-Agent": _UA, "Connection": "keep-alive"})
 
     # 1) Login via API JSON dell'AdE (sostituisce il vecchio form ForgeRock).
@@ -835,9 +1170,11 @@ def _autentica_requests(creds: Creds, log=print) -> AuthResult:
     if "LtpaToken2" not in s.cookies.get_dict():
         log("   ⚠️  LtpaToken2 non ottenuto dal portale: l'instradamento potrebbe dare 403.")
 
-    # 3) Wizard scelta utenza di lavoro via API REST.
+    # 3) Wizard scelta utenza di lavoro via API REST. Ritorna la P.IVA attivata
+    #    (ricavata automaticamente dal CF) e l'elenco delle P.IVA del soggetto.
     log("Configuro l'utenza di lavoro...")
-    _wizard_requests(s, creds, log)
+    piva_scelta, piva_disponibili, denom, cons = _wizard_requests(
+        s, creds, log, scegli_piva=scegli_piva)
 
     # 4) Ingresso nell'app di consultazione: /dp/PI2FC imposta il cookie FATSC (sessione
     #    cons) che, insieme al B2BCookie ottenuto da setUserChoice, autorizza il token B2B.
@@ -852,7 +1189,10 @@ def _autentica_requests(creds: Creds, log=print) -> AuthResult:
 
     # 5) Token + header
     log("Ottengo i token di servizio...")
-    return _finalizza(s, "requests", creds.piva)
+    piva_finale = piva_scelta or creds.piva
+    return _finalizza(s, "requests", piva_finale, piva=piva_finale,
+                      piva_disponibili=piva_disponibili,
+                      denominazione=denom, conservazione=cons)
 
 
 def _instr_headers(x_appl: str) -> dict:
@@ -898,14 +1238,64 @@ def _trova_incarico(template: dict, cfstudio: str) -> dict | None:
     return incarichi[0] if len(incarichi) == 1 else None
 
 
-def _wizard_requests(s: requests.Session, creds: Creds, log=print) -> None:
+def _elenco_piva(disponibili: list) -> list[str]:
+    """Estrae le sole stringhe P.IVA (non vuote) dall'array PIva[] del wizard."""
+    return [str((p or {}).get("piva", "")).strip()
+            for p in (disponibili or []) if (p or {}).get("piva")]
+
+
+def _risolvi_piva(disponibili: list, piva_preferita: str, scegli_piva, log) -> str:
+    """
+    Ricava la P.IVA dell'utenza di lavoro dall'elenco `PIva[]` restituito dal wizard.
+
+    Regola richiesta:
+      - se l'utente ha INDICATO una P.IVA (`piva_preferita`) → si usa quella (ci si
+        fida dell'input; se non è tra quelle del CF si avvisa ma la si usa comunque);
+      - altrimenti, se il CF ha UNA sola P.IVA → scelta automatica;
+      - altrimenti (PIÙ P.IVA e nessuna indicata) → si chiede all'utente con
+        `scegli_piva(disponibili)` (finestra popup in GUI). Senza callback / senza
+        risposta valida si usa la prima e si annota un avviso.
+    Ritorna la P.IVA scelta (stringa), o `piva_preferita` se l'elenco è vuoto
+    (es. profilo «Me stesso», dove il wizard non restituisce PIva[]).
+    """
+    lista = _elenco_piva(disponibili)
+    if piva_preferita:
+        if lista and piva_preferita not in lista:
+            log(f"⚠️  P.IVA indicata {piva_preferita} non tra quelle del CF {lista}: "
+                "la uso comunque come richiesto.")
+        return piva_preferita
+    if len(lista) == 1:
+        log(f"P.IVA rilevata automaticamente dal CF: {lista[0]}")
+        return lista[0]
+    if len(lista) > 1:
+        if scegli_piva is not None:
+            try:
+                scelta = (scegli_piva(list(disponibili)) or "").strip()
+            except Exception as exc:
+                log(f"⚠️  Selettore P.IVA fallito ({exc}); uso la prima.")
+                scelta = ""
+            if scelta and scelta in lista:
+                log(f"P.IVA selezionata: {scelta}")
+                return scelta
+        log(f"⚠️  Il CF ha più P.IVA {lista}: uso la prima ({lista[0]}). "
+            "Indica la P.IVA desiderata per sceglierne un'altra.")
+        return lista[0]
+    return piva_preferita
+
+
+def _wizard_requests(s: requests.Session, creds: Creds, log=print,
+                     scegli_piva=None) -> tuple[str, list, str, bool]:
     """
     Replica via API REST la scelta dell'utenza di lavoro fatta dal wizard SPA:
       GET  initLight        → header x-appl da riusare
       GET  wizardTemplate   → elenco incarichi disponibili
-      POST procediWizard    → tipoutenza, poi delega/incarico
+      POST procediWizard    → tipoutenza, poi delega/incarico (risposta: PIva[])
       POST setUserChoice    → conferma; attiva l'utenza (200 = ok).
     Il campo `incaricante` è l'oggetto incarico serializzato in JSON (come fa la SPA).
+
+    Ritorna `(piva_scelta, piva_disponibili, denominazione, conservazione)`: la P.IVA
+    attivata (ricavata dal CF, via `scegli_piva` se il CF ne ha più d'una), l'elenco
+    grezzo `PIva[]`, e denominazione/conservazione lette dalla risposta di setUserChoice.
     """
     x_appl = X_APPL_DEFAULT
 
@@ -955,25 +1345,31 @@ def _wizard_requests(s: requests.Session, creds: Creds, log=print) -> None:
 
     # Me stesso: nessun incarico, si conferma direttamente il proprio CF.
     if creds.profilo == PROFILO_ME_STESSO:
-        _setuserchoice(s, x_appl, {"tipoutenza": "soloPerMe", "cf": creds.nomeutente}, log)
-        return
+        resp = _setuserchoice(s, x_appl, {"tipoutenza": "soloPerMe", "cf": creds.nomeutente}, log)
+        denom, cons = _anagrafica_da_utente(resp)
+        return creds.piva, [], denom, cons
 
-    # Studio: serve l'oggetto incarico corrispondente al CF studio.
-    incarico = _trova_incarico(template, creds.cfstudio)
+    # Studio/Azienda: serve l'oggetto incarico corrispondente al CF di chi ha dato
+    # l'incarico. Per l'Azienda l'incaricante è l'azienda stessa (cf_cliente), non
+    # lo studio: stesso meccanismo del cassetto studio, solo con un altro CF.
+    cf_incarico = creds.cf_cliente if creds.profilo == PROFILO_AZIENDA else creds.cfstudio
+    incarico = _trova_incarico(template, cf_incarico)
     if incarico is None:
         disponibili = [(i.get("incaricante") or {}).get("cf", "?") for i in _incarichi(template)]
         _dump_debug("_debug_wizardTemplate.txt", json.dumps(template, indent=2, ensure_ascii=False))
+        soggetto = "l'azienda" if creds.profilo == PROFILO_AZIENDA else "lo studio"
         raise AuthError(
             "utenza",
-            f"Incarico per lo studio «{creds.cfstudio}» non trovato. "
+            f"Incarico per {soggetto} «{cf_incarico}» non trovato. "
             + (f"Incarichi disponibili (CF incaricante): {disponibili}. "
                if disponibili else
                "Nessun incarico restituito dal portale (template vuoto: possibile "
                "x-appl scaduto o sessione non valida; salvato _debug_wizardTemplate.txt). ")
-            + "Verifica il CF Studio o completa col backend browser.",
+            + "Verifica il CF indicato o completa col backend browser.",
         )
     incaricante_str = json.dumps(incarico, separators=(",", ":"), ensure_ascii=False)
-    cf_lavoro = creds.cf_cliente if creds.profilo == PROFILO_STUDIO_CLIENTE else creds.cfstudio
+    cf_lavoro = (creds.cf_cliente if creds.profilo in (PROFILO_STUDIO_CLIENTE, PROFILO_AZIENDA)
+                else creds.cfstudio)
 
     base = {
         "tipoutenza": tipoutenza,
@@ -982,20 +1378,54 @@ def _wizard_requests(s: requests.Session, creds: Creds, log=print) -> None:
         "cfDelegante": cf_lavoro,
     }
 
-    # step 2: procedi con delega/incarico (carica le P.IVA dell'utenza)
+    # step 2: procedi con delega/incarico. La risposta contiene `PIva[]`, l'elenco
+    # delle P.IVA del soggetto: una sola → scelta automatica, più d'una → menù/scelta.
+    piva_disponibili: list = []
     try:
-        s.post(f"{INSTR_REST}/procediWizard?v={unix_time()}",
-               headers=_instr_headers(x_appl),
-               data=json.dumps({**base, "pIva": None}), verify=False, timeout=30)
+        r = s.post(f"{INSTR_REST}/procediWizard?v={unix_time()}",
+                   headers=_instr_headers(x_appl),
+                   data=json.dumps({**base, "pIva": None}), verify=False, timeout=30)
+        try:
+            piva_disponibili = (r.json() or {}).get("PIva") or []
+        except ValueError:
+            log("   ⚠️  procediWizard(delega) non JSON: P.IVA non ricavata dal CF.")
     except requests.RequestException:
         pass
 
-    # step 3: conferma definitiva della scelta (attiva l'utenza di lavoro)
-    _setuserchoice(s, x_appl, {**base, "cf": cf_lavoro}, log)
+    piva_scelta = _risolvi_piva(piva_disponibili, creds.piva, scegli_piva, log)
+
+    # Il campo `pIva` serve SOLO a disambiguare quando il CF ha più P.IVA: nel caso a
+    # P.IVA unica il setUserChoice verificato in cattura NON lo include, quindi lo
+    # omettiamo per non alterare il flusso funzionante. Con più P.IVA rifacciamo prima
+    # un procediWizard con la P.IVA scelta (come la SPA alla conferma della tendina).
+    multi = len(_elenco_piva(piva_disponibili)) > 1
+    if multi and piva_scelta:
+        try:
+            s.post(f"{INSTR_REST}/procediWizard?v={unix_time()}",
+                   headers=_instr_headers(x_appl),
+                   data=json.dumps({**base, "pIva": piva_scelta}), verify=False, timeout=30)
+        except requests.RequestException:
+            pass
+
+    # step 3: conferma definitiva della scelta (attiva l'utenza di lavoro).
+    conferma = {**base, "cf": cf_lavoro}
+    if multi and piva_scelta:
+        conferma["pIva"] = piva_scelta
+    resp = _setuserchoice(s, x_appl, conferma, log)
+
+    denom, cons = _anagrafica_da_utente(resp)
+    if not denom:  # fallback: denominazione dell'opzione P.IVA scelta (da PIva[])
+        for p in piva_disponibili:
+            if str((p or {}).get("piva", "")).strip() == piva_scelta:
+                denom = str((p or {}).get("denominazione", "") or "").strip()
+                break
+    return piva_scelta, piva_disponibili, denom, cons
 
 
-def _setuserchoice(s: requests.Session, x_appl: str, body: dict, log) -> None:
-    """POST setUserChoice; solleva AuthError se la scelta utenza non è accettata."""
+def _setuserchoice(s: requests.Session, x_appl: str, body: dict, log) -> dict:
+    """POST setUserChoice; solleva AuthError se la scelta utenza non è accettata.
+    Ritorna il JSON di risposta (contiene `utenteDiLavoro.partitaIva` con denominazione
+    e opzioni di adesione), o {} se non JSON."""
     try:
         r = s.post(f"{INSTR_REST}/setUserChoice?v={unix_time()}",
                    headers=_instr_headers(x_appl), data=json.dumps(body),
@@ -1013,6 +1443,23 @@ def _setuserchoice(s: requests.Session, x_appl: str, body: dict, log) -> None:
             msg or f"Scelta utenza di lavoro non accettata (HTTP {r.status_code}).",
         )
     log("Utenza di lavoro attivata.")
+    try:
+        return r.json() or {}
+    except ValueError:
+        return {}
+
+
+def _anagrafica_da_utente(resp: dict) -> tuple[str, bool]:
+    """
+    Estrae (denominazione, conservazione) dalla risposta di setUserChoice:
+      denominazione = utenteDiLavoro.partitaIva.denominazione;
+      conservazione = utenteDiLavoro.partitaIva.opzioni.datiFattura.attiva
+                      (adesione alla conservazione dati fattura).
+    """
+    pi = (((resp or {}).get("utenteDiLavoro") or {}).get("partitaIva")) or {}
+    denom = str(pi.get("denominazione", "") or "").strip()
+    cons = bool((((pi.get("opzioni") or {}).get("datiFattura")) or {}).get("attiva", False))
+    return denom, cons
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1021,7 +1468,7 @@ def _setuserchoice(s: requests.Session, x_appl: str, body: dict, log) -> None:
 
 def autentica(creds: Creds, backend: str = "browser",
               headless: bool = False, log=print,
-              capture_dir: str | None = None) -> AuthResult:
+              capture_dir: str | None = None, scegli_piva=None) -> AuthResult:
     """
     Esegue l'autenticazione completa al portale AdE e restituisce un AuthResult
     con sessione e header pronti per le chiamate /cons/cons-services/rs/...
@@ -1032,13 +1479,45 @@ def autentica(creds: Creds, backend: str = "browser",
 
     capture_dir: se valorizzato (solo backend browser), registra il traffico di rete
       del login/wizard in `<capture_dir>/capture_login_<ts>.har` (HAR completo) e in un
-      `.log` leggibile, per ricostruire il flusso ForgeRock nel backend requests (C.1).
+      `.log` leggibile, per ricostruire il flusso ForgeRock nel backend requests.
+
+    scegli_piva: callback opzionale `(disponibili: list[dict]) -> str` (entrambi i
+      backend) invocata quando il CF ha più P.IVA e nessuna è stata indicata; deve
+      restituire la P.IVA scelta. Nel backend browser è usata SOLO se headless (a
+      finestra visibile la scelta si fa a mano nella tendina). Se una P.IVA è indicata
+      viene selezionata direttamente; con una sola P.IVA la scelta è automatica.
 
     Solleva AuthError(step, dettaglio) in caso di fallimento.
     """
     if backend == "requests":
-        return _autentica_requests(creds, log=log)
+        return _autentica_requests(creds, log=log, scegli_piva=scegli_piva)
     if backend == "browser":
         return _autentica_browser(creds, headless=headless, log=log,
-                                  capture_dir=capture_dir)
+                                  capture_dir=capture_dir, scegli_piva=scegli_piva)
     raise AuthError("config", f"Backend sconosciuto: {backend!r} (usa 'browser' o 'requests').")
+
+
+def seleziona_utenza(auth: AuthResult, creds: Creds, log=print,
+                     scegli_piva=None) -> AuthResult:
+    """
+    Cambia utenza di lavoro RIUSANDO la sessione già autenticata di `auth` (come il
+    «Cambia Utenza» del portale), senza rifare il login telematico. Riesegue il wizard
+    REST di instradamento per il nuovo `creds.cf_cliente` e rifà i token B2B.
+
+    Utile per operazioni massive su più deleghe con un solo accesso (aggiornamento
+    anagrafica di tutti i clienti). Ritorna un nuovo AuthResult per la nuova utenza.
+    Solleva AuthError se la scelta utenza non riesce.
+    """
+    s = auth.session
+    piva_scelta, piva_disponibili, denom, cons = _wizard_requests(
+        s, creds, log, scegli_piva=scegli_piva)
+    # Rientro nell'app di consultazione (best-effort) e nuovi token per la nuova utenza.
+    for url in (f"{IVASERVIZI}/dp/PI2FC", CONS_WEB):
+        try:
+            s.get(url, headers={"User-Agent": _UA}, verify=False, timeout=30)
+        except requests.RequestException:
+            pass
+    piva_finale = piva_scelta or creds.piva
+    return _finalizza(s, auth.backend or "requests", piva_finale, note=list(auth.note),
+                      piva=piva_finale, piva_disponibili=piva_disponibili,
+                      denominazione=denom, conservazione=cons)

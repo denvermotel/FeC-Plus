@@ -53,14 +53,71 @@
   <section>
     <div class="wrap">
       <div class="relhead">
+        <h2>v0.03 alpha</h2>
+        <span class="badge curr">versione attuale</span>
+        <span class="date">luglio 2026</span>
+      </div>
+
+      <h3>Modalità di accesso</h3>
+      <ul>
+        <li><span class="tag">NEW</span> <strong>Modalità di accesso utente-friendly</strong>, scelte da un unico selettore nel riquadro «Credenziali Entratel»: <strong>Studio - Delega Cliente</strong>, <strong>Studio - Cassetto proprio</strong>, <strong>Azienda</strong>, <strong>Libero professionista / Me stesso</strong>.</li>
+        <li><span class="tag">NEW</span> Supporto all'accesso come <strong>Azienda</strong> (utente incaricato direttamente su una P.IVA aziendale, non tramite delega).</li>
+      </ul>
+
+      <h3>Richieste massive e download</h3>
+      <ul>
+        <li><span class="tag">NEW</span> <strong>Spezzettamento automatico dei periodi lunghi</strong>: richieste superiori a 3 mesi (fino a un massimo di 12) vengono divise in blocchi ed eseguite in sequenza, sia per i download di consultazione sia per le richieste massive/corrispettivi.</li>
+        <li><span class="tag">NEW</span> Nuovo tipo di richiesta massiva <strong>«Messe a Disposizione»</strong>, oltre a emesse/ricevute (per emissione o ricezione)/corrispettivi.</li>
+        <li><span class="tag">NEW</span> <strong>Scaricamento dei risultati</strong> prodotti dal portale per le richieste massive inviate in precedenza (anche richieste effettuate direttamente dal portale e non dall'applicativo): elenco delle richieste disponibili con denominazione del soggetto, selezione e scarico, estrazione automatica o differita dello zip, eliminazione delle richieste già scaricate.</li>
+        <li><span class="tag">NEW</span> Nella scheda <strong>Download Standard</strong>, due opzioni per accodare nello stesso periodo un secondo download: <strong>«Includi fatture transfrontaliere»</strong> (con le fatture emesse) e <strong>«Includi fatture Messe a Disposizione»</strong> (con le fatture ricevute).</li>
+        <li><span class="tag">NEW</span> <strong>Esclusione automatica delle fatture scartate dalla Pubblica Amministrazione</strong> dal download (attiva di default, disattivabile).</li>
+        <li><span class="tag">NEW</span> <strong>Estrazione dell'XML</strong> dalle fatture firmate digitalmente (<code>.p7m</code>), al posto del file firmato originale (opzionale).</li>
+        <li><span class="tag">FIX</span> Maggiore resistenza alle disconnessioni del portale AdE durante download lunghi (nuovi tentativi automatici invece di far fallire l'intero blocco).</li>
+      </ul>
+
+      <h3>Bolli virtuali</h3>
+      <ul>
+        <li><span class="tag">CHG</span>La funzione ora produce un <strong>riepilogo CSV</strong> (elenco A/B, importo calcolato, scadenza, importo versato e dati di pagamento), utilizzabile anche per l'intero anno oltre che per singolo trimestre.</li>
+      </ul>
+
+      <h3>Anagrafica deleghe</h3>
+      <ul>
+        <li><span class="tag">NEW</span> Nuova scheda <strong>«Deleghe»</strong>: archivio locale dei clienti delegati, con inserimento manuale e import/export CSV (compatibile con l'esportazione ufficiale del portale AdE); un nuovo import aggiorna in sicurezza solo la scadenza della delega, senza toccare gli altri dati già presenti.</li>
+      </ul>
+
+      <h3>Esportazione Excel</h3>
+      <ul>
+        <li><span class="tag">NEW</span> Nuova scheda <strong>«Utility»</strong>: esporta in <strong>Excel (.xlsx)</strong> l'elenco delle fatture (emesse, ricevute, transfrontaliere) o dei corrispettivi, con dettaglio per documento e riepilogo per aliquota/natura IVA; per l'anno intero è possibile scegliere un file unico oppure uno per trimestre/mese.</li>
+      </ul>
+
+      <h3>Interfaccia</h3>
+      <ul>
+        <li><span class="tag">NEW</span> Tutte le schede sono ora disponibili nella <strong>GUI pubblica</strong> (in precedenza riservate alla versione sviluppatore), esclusa «Test Login» che resta uno strumento diagnostico interno.</li>
+        <li><span class="tag">CHG</span> Le schede «Fatture Massive» e «Corrispettivi» sono state unificate in un'unica scheda <strong>«Richieste Massive»</strong>.</li>
+        <li><span class="tag">NEW</span> Il riquadro <strong>«Credenziali Entratel»</strong> è ora comprimibile, per risparmiare spazio.</li>
+        <li><span class="tag">NEW</span> Su Windows è disponibile un eseguibile standalone <strong><code>FeC-Plus.exe</code></strong>: si scarica e si avvia direttamente, senza installare Python o altre dipendenze.</li>
+      </ul>
+
+      <h3>Dipendenze</h3>
+      <ul>
+        <li><span class="tag">NEW</span> <strong>Controllo delle dipendenze all'avvio</strong>: GUI e CLI verificano i pacchetti richiesti e segnalano quelli mancanti. <strong>Playwright</strong> è trattato come <strong>opzionale</strong> (il backend «requests» funziona senza browser); nella GUI l'avviso è inline e non bloccante, nella CLI è testuale.</li>
+        <li><span class="tag">CHG</span> Pulsante <strong>«Installa dipendenze»</strong>: ora fa <strong>scegliere</strong> se installare tutto (incluso Playwright + Chromium) o solo il set leggero per il backend «requests». Corretto un bug per cui non venivano installati tutti i pacchetti.</li>
+        <li><span class="tag">NEW</span> <em>(versione sviluppatore)</em> Strumento <strong>«Disinstalla dipendenze»</strong> per rimuovere i pacchetti selezionati, utile a verificare il controllo all'avvio.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="relhead">
         <h2>v0.02 alpha</h2>
-        <span class="badge curr">in corso</span>
+        <span class="badge past">release</span>
         <span class="date">giugno 2026</span>
       </div>
 
       <h3>Autenticazione</h3>
       <ul>
-        <li><span class="tag">NEW</span> Login <strong>«solo requests»</strong> senza browser, completo e verificato: l'app si autentica via API JSON (<code>/api/login/telematico</code>) e configura l'utenza di lavoro tramite le API REST di instradamento — niente più Playwright per l'accesso.</li>
+        <li><span class="tag">NEW</span> Login <strong>«solo requests»</strong> senza browser, completo e verificato: l'app si autentica via API JSON (<code>/api/login/telematico</code>) e configura l'utenza di lavoro tramite le API REST di instradamento - niente più Playwright per l'accesso.</li>
         <li><span class="tag">CHG</span> Il backend <strong>requests</strong> è ora il <strong>default</strong> della versione pubblica (più leggero, nessun browser da installare).</li>
         <li><span class="tag">NEW</span> Modalità <strong>headless</strong> del browser attiva di default, con interruttore in ogni scheda (versione sviluppatore).</li>
         <li><span class="tag">NEW</span> Strumento di <strong>cattura del login</strong> (HAR) per diagnostica e manutenzione.</li>
@@ -110,17 +167,16 @@
 
   <section class="roadmap">
     <div class="wrap">
-      <h2 style="margin:0 0 6px;">Roadmap - funzioni future</h2>
-      <p class="date">Funzionalità in programma, non ancora disponibili.</p>
+      <h2 style="margin:0 0 6px;">Roadmap - cosa manca ancora</h2>
 
       <div class="card">
-        <h3>🔐 Autenticazione tramite SPID</h3>
-        <p>Accesso al portale anche con <strong>SPID</strong> (oltre a Fisconline/Entratel), con apertura del browser per l'inserimento delle credenziali presso l'Identity Provider.</p>
+        <h3>🔐 Autenticazione tramite SPID/CIE</h3>
+        <p>Accesso al portale anche con <strong>SPID</strong> e <strong>CIE</strong>(oltre a Fisconline/Entratel), con apertura del browser per l'inserimento delle credenziali presso l'Identity Provider.</p>
       </div>
 
       <div class="card">
-        <h3>👥 Anagrafica deleghe ricevute</h3>
-        <p>Elenco locale dei <strong>clienti delegati</strong> (deleghe ricevute dallo studio) per scegliere il soggetto da una lista ed eseguire i download in sequenza, senza digitare ogni volta CF e P.IVA.</p>
+        <h3>🎨 Nuova GUI</h3>
+        <p>La GUI attuale è un mezzo per testare le funzioni che vengono man mano implementate e testate. Nelle future versioni si vuole ridisegnare la GUI con un approccio moderno e user-friendly.</p>
       </div>
     </div>
   </section>
@@ -138,7 +194,7 @@
     <p>
       Distribuito sotto licenza MIT ·
       <a href="https://github.com/denvermotel/FeC-Plus">Repository</a> ·
-      <a href="https://github.com/denvermotel/FeC-Plus?tab=MIT-1-ov-file">Licenza</a>
+      <a href="https://raw.githubusercontent.com/denvermotel/FeC-Plus/refs/heads/master/LICENSE">Licenza</a>
     </p>
     <p>
       Sviluppato da Giovanni Genna · fork di

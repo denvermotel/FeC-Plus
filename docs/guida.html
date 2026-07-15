@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>FeC-Plus — Guida di utilizzo</title>
+  <title>FeC-Plus - Guida di utilizzo</title>
   <meta name="description" content="Guida d'uso di FeC-Plus: interfaccia grafica (GUI) e riga di comando (fec_cli.py) per scaricare fatture e corrispettivi dal portale AdE." />
   <style>
     :root {
@@ -43,7 +43,7 @@
 
   <header class="hero">
     <a class="home" href="index.html">← Home</a>
-    <h1><img src="logo.png" alt="Logo FeC-Plus"> FeC-Plus — Guida</h1>
+    <h1><img src="logo.png" alt="Logo FeC-Plus"> FeC-Plus - Guida</h1>
     <p>Due modi d'uso: l'<strong>interfaccia grafica</strong> (GUI) e la <strong>riga di comando</strong> (<code>fec_cli.py</code>), senza GUI.</p>
   </header>
 
@@ -62,10 +62,14 @@ playwright install chromium</code></pre>
       <h2>Interfaccia grafica (GUI)</h2>
       <p class="sub">Il modo più semplice: doppio click sul launcher, o avvio da terminale.</p>
       <ul>
-        <li><strong>Windows</strong>: <code>avvia_fec.bat</code> &nbsp;·&nbsp; <strong>macOS</strong>: <code>avvia_fec.command</code></li>
+        <li><strong>Windows, senza installare nulla</strong>: scarica ed esegui <code>FeC-Plus.exe</code> (sezione Releases del repository), nessuna installazione di Python richiesta.</li>
+        <li><strong>Windows da sorgente</strong>: <code>avvia_fec.bat</code> &nbsp;·&nbsp; <strong>macOS</strong>: <code>avvia_fec.command</code></li>
         <li>Versione sviluppatore (Test Login, cattura HAR, scelta backend/headless): <code>avvia_fec_dev.bat</code> / <code>avvia_fec_dev.command</code></li>
         <li>Oppure: <code>python fec_gui.py</code></li>
       </ul>
+
+      <h3>Modalità di accesso e schede</h3>
+      <p class="sub">Nel riquadro <strong>«Credenziali Entratel»</strong> si sceglie una volta sola la <strong>modalità di accesso</strong> (Studio - Delega Cliente, Studio - Cassetto proprio, Azienda, Libero professionista/Me stesso), valida per tutte le schede. Oltre a <strong>Download Standard</strong> sono disponibili <strong>Richieste Massive</strong> (con scaricamento dei risultati delle richieste già inviate), <strong>Bolli Virtuali</strong>, <strong>Utility</strong> (esportazione Excel) e <strong>Deleghe</strong> (anagrafica clienti delegati, con import/export CSV).</p>
 
       <h3>Cartelle di download (Impostazioni)</h3>
       <p class="sub">In <strong>⚙ Impostazioni</strong> si imposta la cartella di download di default e, se serve, una cartella diversa per ogni tipo di documento.</p>
@@ -93,9 +97,9 @@ playwright install chromium</code></pre>
         <tr><td><code>--password</code></td><td>Password. <em>Obbligatorio</em> (oppure <code>--password-env</code>).</td></tr>
         <tr><td><code>--password-env VAR</code></td><td>Legge la password dalla variabile d'ambiente <code>VAR</code> (consigliato).</td></tr>
         <tr><td><code>--cfstudio</code></td><td>CF dello studio incaricante (profili 1 e 2).</td></tr>
-        <tr><td><code>--cf-cliente</code></td><td>CF del cliente delegante.</td></tr>
+        <tr><td><code>--cf-cliente</code></td><td>CF del cliente delegante, o dell'azienda per <code>--profilo 4</code>.</td></tr>
         <tr><td><code>--piva</code></td><td>P.IVA dell'utenza di lavoro (richiesta da massive e bolli).</td></tr>
-        <tr><td><code>--profilo {1,2,3}</code></td><td>1 = studio→cliente · 2 = cassetto studio · 3 = me stesso. Default: 1.</td></tr>
+        <tr><td><code>--profilo {1,2,3,4}</code></td><td>1 = Studio - Delega Cliente · 2 = Studio - Cassetto proprio · 3 = Libero professionista/Me stesso · 4 = Azienda. Default: 1.</td></tr>
         <tr><td><code>--backend {requests,browser}</code></td><td>Backend di login. Default: <code>requests</code> (nessun browser).</td></tr>
         <tr><td><code>--no-headless</code></td><td>Mostra la finestra del browser (solo backend <code>browser</code>).</td></tr>
         <tr><td><code>--dest DIR</code></td><td>Cartella di destinazione dei download. Default: <code>./Download</code>.</td></tr>
@@ -113,10 +117,15 @@ playwright install chromium</code></pre>
         <tr><td><code>massive-emesse</code></td><td>Richiesta massiva emesse</td><td><code>--dal --al</code></td><td>aaaa-mm-gg</td></tr>
         <tr><td><code>massive-ricevute-emissione</code></td><td>Massiva ricevute (data emissione)</td><td><code>--dal --al</code></td><td>aaaa-mm-gg</td></tr>
         <tr><td><code>massive-ricevute-ricezione</code></td><td>Massiva ricevute (data ricezione)</td><td><code>--dal --al</code></td><td>aaaa-mm-gg</td></tr>
+        <tr><td><code>massive-disposizione</code></td><td>Massiva fatture messe a disposizione</td><td><code>--dal --al</code></td><td>aaaa-mm-gg</td></tr>
         <tr><td><code>corrispettivi</code></td><td>Richiesta massiva corrispettivi</td><td><code>--dal --al</code></td><td>aaaa-mm-gg</td></tr>
-        <tr><td><code>bolli</code></td><td>Bolli virtuali → PDF F24</td><td><code>--trimestre 1|2|3|4 --anno aaaa</code></td><td>—</td></tr>
+        <tr><td><code>bolli</code></td><td>Bolli virtuali → riepilogo CSV</td><td><code>--trimestre 1|2|3|4|tutti --anno aaaa</code></td><td>-</td></tr>
       </table>
-      <p class="sub" style="margin-top:6px"><code>--tipo-data</code>: 1 = ricerca per data ricezione (default), 2 = per data emissione.</p>
+      <p class="sub" style="margin-top:6px"><code>--tipo-data</code>: 1 = ricerca per data ricezione (default), 2 = per data emissione. <code>--trimestre tutti</code>: riepilogo sull'intero anno invece che su un singolo trimestre.</p>
+
+      <div class="note">
+        ℹ️ Il modello F24 <strong>non è generabile</strong> da questa procedura del portale AdE (limite dell'AdE, non dell'app): il comando <code>bolli</code> produce un riepilogo CSV con elenco A/B, importo calcolato, scadenza e dati di pagamento.
+      </div>
 
       <div class="note">
         ⚠️ <strong>Sicurezza:</strong> le credenziali passate come argomenti restano visibili nella
@@ -136,7 +145,7 @@ python fec_cli.py --cf RSSMRA80A01H501U --pin 1234 --password-env FEC_PWD \
     --cf-cliente 09876543210 --piva 09876543210 \
     corrispettivi --dal 2026-01-01 --al 2026-03-31
 
-# Bolli virtuali 1° trimestre 2026 → PDF F24
+# Bolli virtuali 1° trimestre 2026 → riepilogo CSV
 python fec_cli.py --cf RSSMRA80A01H501U --pin 1234 --password-env FEC_PWD \
     --cf-cliente 09876543210 --piva 09876543210 \
     bolli --trimestre 1 --anno 2026
@@ -167,7 +176,7 @@ python fec_cli.py --cf X --pin Y --password Z --dry-run emesse --dal 01012026 --
     <p>
       Distribuito sotto licenza MIT ·
       <a href="https://github.com/denvermotel/FeC-Plus">Repository</a> ·
-      <a href="https://github.com/denvermotel/FeC-Plus?tab=MIT-1-ov-file">Licenza</a>
+      <a href="https://raw.githubusercontent.com/denvermotel/FeC-Plus/refs/heads/master/LICENSE">Licenza</a>
     </p>
     <p>
       Sviluppato da Giovanni Genna · fork di
