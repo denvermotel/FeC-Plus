@@ -151,6 +151,115 @@ ETICHETTE_DELEGHE_DEFAULT = {"campo1": "Etichetta 1", "campo2": "Etichetta 2"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+class ProgressoGUI:
+    """Implementazione GUI del canale `Progresso` (fec_download).
+
+    NON eredita da `fec_download.Progresso`, di proposito: `fec_gui` importa a
+    livello di modulo solo stdlib e `fec_deps`, cosi' la finestra si apre e sa
+    offrire l'installazione delle dipendenze anche quando `requests` non c'e'.
+    Ereditare qui costringerebbe a un `import fec_download` in testa al file e
+    romperebbe quel percorso. La libreria non fa alcun `isinstance`: le basta
+    un oggetto con questi metodi.
+
+    I metodi vengono chiamati dal WORKER THREAD e non devono toccare Tk: qui
+    si limitano ad accodare. Una pompa su `root.after` svuota la coda e
+    ridisegna UNA volta ogni 120 ms - senza, un download di 500 fatture
+    produrrebbe 500 ridisegni del Canvas.
+    """
+
+    INTERVALLO_MS = 120
+
+    def __init__(self, app, totale_fasi: int):
+        import queue
+        self.app = app
+        self.coda = queue.Queue()
+        self.totale_fasi = max(1, int(totale_fasi))
+        self.fase_corrente = 0        # offset delle fasi gia' viste
+        self.etichetta = ""
+        self.messaggio_libero = ""
+        self.viva = True
+
+    # ── Lato worker thread: solo accodamento ──────────────────────────────
+
+    def fase(self, etichetta, indice, totale_fasi):
+        self.coda.put(("fase", etichetta))
+
+    def totale(self, n):
+        self.coda.put(("totale", n))
+
+    def esito(self, tipo):
+        self.coda.put(("esito", tipo))
+
+    def messaggio(self, testo):
+        self.coda.put(("messaggio", testo))
+
+    def conclusa(self, annullato=False):
+        self.coda.put(("conclusa", annullato))
+
+    # ── Lato thread Tk: pompa e disegno ───────────────────────────────────
+
+    def avvia_pompa(self):
+        self.viva = True
+        self.app.root.after(self.INTERVALLO_MS, self._pompa)
+
+    def ferma(self):
+        self.viva = False
+
+    def _pompa(self):
+        import queue as _q
+        cambiato = False
+        while True:
+            try:
+                evento = self.coda.get_nowait()
+            except _q.Empty:
+                break
+            self._applica(evento)
+            cambiato = True
+        if cambiato:
+            self.app.nastro.ridisegna()
+            self.app.stato_var.set(self._riga_di_stato())
+        if self.viva:
+            self.app.root.after(self.INTERVALLO_MS, self._pompa)
+
+    def _applica(self, evento):
+        tipo = evento[0]
+        if tipo == "fase":
+            self.fase_corrente += 1
+            self.etichetta = evento[1]
+            self.messaggio_libero = ""
+            self.app.modello_nastro.nuovo_segmento(evento[1])
+        elif tipo == "totale":
+            self.app.modello_nastro.imposta_totale(evento[1])
+        elif tipo == "esito":
+            self.app.modello_nastro.aggiungi_esito(evento[1])
+        elif tipo == "messaggio":
+            self.messaggio_libero = evento[1]
+        elif tipo == "conclusa":
+            self.messaggio_libero = ("Interrotto dall'utente." if evento[1]
+                                     else "Operazione completata.")
+
+    def _riga_di_stato(self) -> str:
+        r = self.app.modello_nastro.riepilogo()
+        pezzi = []
+        if self.etichetta:
+            pezzi.append(self.etichetta)
+        if self.messaggio_libero:
+            pezzi.append(self.messaggio_libero)
+        if r.totale is not None:
+            pezzi.append(f"{r.fatti}/{r.totale}")
+            conteggi = []
+            if r.ok:
+                conteggi.append(f"✓ {r.ok}")
+            if r.saltati:
+                conteggi.append(f"⏭ {r.saltati}")
+            if r.errori:
+                conteggi.append(f"❌ {r.errori}")
+            if conteggi:
+                pezzi.append("  ".join(conteggi))
+        pezzi.append(f"fase {min(self.fase_corrente, self.totale_fasi)} di {self.totale_fasi}")
+        return "  ·  ".join(pezzi)
+
+
 class FecGui:
 
     def __init__(self, root: tk.Tk):
@@ -1165,11 +1274,19 @@ class FecGui:
         """Ripristina lo stato dei controlli al termine dell'operazione in-process."""
         self.control = None
         self._reset_pausa_btn()
+        self._imposta_comandi_task(False)
+        if self.progresso is not None:
+            # Prima si ferma, poi un ultimo giro di pompa: cosi' la coda si
+            # svuota senza riprogrammare un altro giro. Il nastro resta com'e'
+            # come resoconto, fino al task successivo.
+            self.progresso.ferma()
+            self.progresso._pompa()
 
-    def _esegui_in_process(self, cfcl, piva, profilo: int, descrizione, operazione):
+    def _esegui_in_process(self, cfcl, piva, profilo: int, descrizione, operazione,
+                           fasi_previste: int = 1):
         """
         Autentica UNA volta in-process (backend/headless dalla scheda Test Login)
-        e poi esegue `operazione(res, log, fec_queue)` sull'AuthResult.
+        e poi esegue `operazione(res, log, fec_queue, control, progresso)` sull'AuthResult.
         `operazione` deve chiamare `fec_queue.esegui_richiesta(...)`, che orchestra
         lo spezzettamento dei periodi lunghi sopra fec_download. `profilo` è già il
         valore numerico risolto (vedi `_profilo_da_modalita`), non la stringa combo.
@@ -1185,6 +1302,15 @@ class FecGui:
         self.control = fec_download.Controllo()
         self._reset_pausa_btn()
         control = self.control
+
+        # Fasi note PRIMA di partire: `spezza_periodo` e' una funzione pura,
+        # senza rete, quindi il denominatore di «fase 3 di 8» e' onesto dalla
+        # prima fase invece di crescere sotto gli occhi dell'utente.
+        self.modello_nastro.azzera()
+        self.progresso = ProgressoGUI(self, fasi_previste)
+        self.progresso.avvia_pompa()
+        self._imposta_comandi_task(True)
+        progresso = self.progresso
 
         def task(log):
             from ade_auth import autentica, Creds, AuthError
@@ -1215,14 +1341,17 @@ class FecGui:
                     log(f"⚠️  Aggiornamento anagrafica non riuscito: {exc}")
 
             try:
-                esito = operazione(res, log, fec_queue, control)
+                esito = operazione(res, log, fec_queue, control, progresso)
             except fec_download.DownloadAnnullato as exc:
                 log(f"\n⏹  {exc}")
+                progresso.conclusa(annullato=True)
                 return
             except fec_download.DownloadError as exc:
                 log(f"\n❌ Operazione non riuscita: {exc}")
+                progresso.conclusa()
                 return
             log("\n[Completato]")
+            progresso.conclusa()
             if self.popup_fine_task.get():
                 cartelle = self._cartelle_da_esito(esito)
                 self.root.after(0, self._conferma_completato, descrizione, cartelle)
@@ -2999,51 +3128,73 @@ class FecGui:
         includi_trans = bool(self.std_includi_trans.get())
         includi_disposizione = bool(self.std_includi_disposizione.get())
 
-        def _op_emesse(res, log, fq, ctrl):
+        def _op_emesse(res, log, fq, ctrl, prog):
             esiti = [fq.esegui_richiesta(res, "emesse", dal=dal, al=al, cf_cliente=cfcl,
                                 dest_dir=d_em, sottocartella=s_em, control=ctrl, log=log,
+                                progresso=prog,
                                 escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m, csv_ade=csv_ade,
                                 filtro_piva=filtro_piva, filtro_cf=filtro_cf)]
             if includi_trans:
                 log("\n↪  Aggiungo in coda: Transfrontaliere Emesse (stesso periodo)...")
                 esiti.append(fq.esegui_richiesta(res, "trans_emesse", dal=dal, al=al, cf_cliente=cfcl,
                                     dest_dir=d_te, sottocartella=s_te, control=ctrl, log=log,
+                                    progresso=prog,
                                     escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m, csv_ade=csv_ade,
                                     filtro_piva=filtro_piva, filtro_cf=filtro_cf))
             return esiti
 
-        def _op_ricevute(res, log, fq, ctrl):
+        def _op_ricevute(res, log, fq, ctrl, prog):
             esiti = [fq.esegui_richiesta(res, "ricevute", dal=dal, al=al, cf_cliente=cfcl,
                                 tipo_data=tipdata, dest_dir=d_ri, sottocartella=s_ri,
                                 control=ctrl, log=log,
+                                progresso=prog,
                                 escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m, csv_ade=csv_ade,
                                 filtro_piva=filtro_piva, filtro_cf=filtro_cf)]
             if includi_disposizione:
                 log("\n↪  Aggiungo in coda: Messe a Disposizione (stesso periodo)...")
                 esiti.append(fq.esegui_richiesta(res, "messe_disposizione", dal=dal, al=al, cf_cliente=cfcl,
                                     dest_dir=d_md, sottocartella=s_md, control=ctrl, log=log,
+                                    progresso=prog,
                                     escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m, csv_ade=csv_ade))
             return esiti
 
         OPS = {
             "Fatture Emesse": _op_emesse,
             "Fatture Ricevute": _op_ricevute,
-            "Transfrontaliere Emesse": lambda res, log, fq, ctrl:
+            "Transfrontaliere Emesse": lambda res, log, fq, ctrl, prog:
                 fq.esegui_richiesta(res, "trans_emesse", dal=dal, al=al, cf_cliente=cfcl,
                                     dest_dir=d_te, sottocartella=s_te, control=ctrl, log=log,
+                                    progresso=prog,
                                     escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m, csv_ade=csv_ade,
                                     filtro_piva=filtro_piva, filtro_cf=filtro_cf),
-            "Transfrontaliere Ricevute": lambda res, log, fq, ctrl:
+            "Transfrontaliere Ricevute": lambda res, log, fq, ctrl, prog:
                 fq.esegui_richiesta(res, "trans_ricevute", dal=dal, al=al, cf_cliente=cfcl,
                                     dest_dir=d_tr, sottocartella=s_tr, control=ctrl, log=log,
+                                    progresso=prog,
                                     escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m, csv_ade=csv_ade,
                                     filtro_piva=filtro_piva, filtro_cf=filtro_cf),
-            "Messe a Disposizione": lambda res, log, fq, ctrl:
+            "Messe a Disposizione": lambda res, log, fq, ctrl, prog:
                 fq.esegui_richiesta(res, "messe_disposizione", dal=dal, al=al, cf_cliente=cfcl,
                                     dest_dir=d_md, sottocartella=s_md, control=ctrl, log=log,
+                                    progresso=prog,
                                     escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m, csv_ade=csv_ade),
         }
-        self._esegui_in_process(cfcl, piva, _profilo_da_modalita(self.modalita.get()), tipo, OPS[tipo])
+        # Quante fasi vedra' l'utente: un blocco di periodo per ogni tipo in coda.
+        # `spezza_periodo` e' pura e senza rete: se le date sono invalide solleva
+        # qui esattamente come farebbe il download un istante dopo, e il popup di
+        # errore la mostra - nessuna validazione duplicata.
+        import fec_queue as _fq
+        tipi_in_coda = {"Fatture Emesse": ["emesse"] + (["trans_emesse"] if includi_trans else []),
+                        "Fatture Ricevute": ["ricevute"] + (["messe_disposizione"] if includi_disposizione else []),
+                        "Transfrontaliere Emesse": ["trans_emesse"],
+                        "Transfrontaliere Ricevute": ["trans_ricevute"],
+                        "Messe a Disposizione": ["messe_disposizione"]}[tipo]
+        try:
+            fasi = sum(len(_fq.spezza_periodo(dal, al, "%d%m%Y")) for _ in tipi_in_coda)
+        except Exception:
+            fasi = len(tipi_in_coda)     # date invalide: ci pensa il download a dirlo
+        self._esegui_in_process(cfcl, piva, _profilo_da_modalita(self.modalita.get()),
+                                tipo, OPS[tipo], fasi)
 
     # ─────────────────────────────────────────────────────────────────────────
     # TAB 2 - Richieste Massive
@@ -3131,7 +3282,7 @@ class FecGui:
         classe, chiave_richiesta = self._RICHIESTA_MASSIVA_OPS[tipo]
         destdir, sotto = self._dest_classe(classe)
 
-        def op(res, log, fq, ctrl):
+        def op(res, log, fq, ctrl, prog):
             # P.IVA non obbligatoria: se vuota, si deduce dall'utenza di lavoro
             # attiva (res.piva, già risolta al login) o, in subordine, dalla
             # P.IVA salvata in anagrafica deleghe per lo stesso CF cliente.
@@ -3284,7 +3435,7 @@ class FecGui:
         if not self._validate(CF=cf, PIN=pin, Password=pwd, **{"CF Studio": cfst}):
             return
 
-        def op(res, log, fq, ctrl):
+        def op(res, log, fq, ctrl, prog):
             righe = self._costruisci_righe_risultati(res, log, cf_default=cfcl, piva_default=piva)
             log(f"\n{len(righe)} risultati trovati sul portale.")
             self.root.after(0, self._mostra_popup_risultati_massivi, righe)
@@ -3591,7 +3742,7 @@ class FecGui:
                               Trimestre=trim_ui, Anno=anno):
             return
 
-        op = lambda res, log, fq, ctrl: fq.esegui_richiesta(
+        op = lambda res, log, fq, ctrl, prog: fq.esegui_richiesta(
             res, "bolli", cf_cliente=cfcl, piva=piva, trimestre=trim, anno=anno,
             dest_dir=destdir, sottocartella=sotto, control=ctrl, log=log)
         self._esegui_in_process(cfcl, piva, _profilo_da_modalita(self.modalita.get()),
@@ -3770,7 +3921,7 @@ class FecGui:
 
         gran = self._util_gran()
 
-        def op(res, log, fq, ctrl):
+        def op(res, log, fq, ctrl, prog):
             import fec_utility
             piva_eff = piva
             if corrispettivi and not piva_eff:
@@ -3831,7 +3982,7 @@ class FecGui:
             return
         materiale = os.path.join(SCRIPT_DIR, "_materiale")
 
-        def op(res, log, fq, ctrl):
+        def op(res, log, fq, ctrl, prog):
             import fec_utility
             fec_utility.dump_json_esempio(res, tipo, dal, al,
                                           dest_dir=materiale, log=log)
