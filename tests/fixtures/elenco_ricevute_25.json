@@ -1,0 +1,482 @@
+[
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0001",
+  "dataFattura": "2025-09-15",
+  "dataAccoglienzaFile": "2025-09-15",
+  "denominazioneEmittente": "FORNITORE0001",
+  "denominazioneCliente": "CLIENTE0001",
+  "imponibile": "+000000001689,50",
+  "imposta": "+000000000323,50",
+  "fileDownload": {
+   "idInvio": "SDI0001",
+   "statoFile": "Mancata consegna",
+   "dataPresaVisione": "10/08/2026"
+  },
+  "pivaEmittente": "PI0001",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0002",
+  "dataFattura": "2025-11-18",
+  "dataAccoglienzaFile": "2025-11-21",
+  "denominazioneEmittente": "FORNITORE0002",
+  "denominazioneCliente": "CLIENTE0002",
+  "imponibile": "+000000000371,12",
+  "imposta": "+000000000040,47",
+  "fileDownload": {
+   "idInvio": "SDI0002",
+   "statoFile": "Mancata consegna",
+   "dataPresaVisione": "10/08/2026"
+  },
+  "pivaEmittente": "PI0002",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0003",
+  "dataFattura": "2026-08-07",
+  "dataAccoglienzaFile": "2026-08-07",
+  "denominazioneEmittente": "FORNITORE0003",
+  "denominazioneCliente": "CLIENTE0003",
+  "imponibile": "+000000000012,30",
+  "imposta": "+000000000002,70",
+  "fileDownload": {
+   "idInvio": "SDI0003",
+   "statoFile": "Consegnata"
+  },
+  "dataConsegna": "07/08/2026",
+  "cfEmittente": "CF0001",
+  "pivaEmittente": "PI0003",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0004",
+  "dataFattura": "2026-08-05",
+  "dataAccoglienzaFile": "2026-08-07",
+  "denominazioneEmittente": "FORNITORE0004",
+  "denominazioneCliente": "CLIENTE0004",
+  "imponibile": "+000000000482,79",
+  "imposta": "+000000000106,21",
+  "fileDownload": {
+   "idInvio": "SDI0004",
+   "statoFile": "Consegnata"
+  },
+  "dataConsegna": "07/08/2026",
+  "pivaEmittente": "PI0004",
+  "cfCliente": "CFC0001",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0005",
+  "dataFattura": "2026-08-04",
+  "dataAccoglienzaFile": "2026-08-06",
+  "denominazioneEmittente": "FORNITORE0005",
+  "denominazioneCliente": "CLIENTE0003",
+  "imponibile": "+000000000016,64",
+  "imposta": "+000000000001,66",
+  "fileDownload": {
+   "idInvio": "SDI0005",
+   "statoFile": "Consegnata"
+  },
+  "dataConsegna": "06/08/2026",
+  "cfEmittente": "CF0002",
+  "pivaEmittente": "PI0005",
+  "cfCliente": "CFC0001",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura differita (TD24)",
+  "numeroFattura": "DOC0006",
+  "dataFattura": "2026-07-31",
+  "dataAccoglienzaFile": "2026-08-04",
+  "denominazioneEmittente": "FORNITORE0006",
+  "denominazioneCliente": "CLIENTE0003",
+  "imponibile": "+000000000043,81",
+  "imposta": "+000000000009,64",
+  "fileDownload": {
+   "idInvio": "SDI0006",
+   "statoFile": "Consegnata"
+  },
+  "dataConsegna": "04/08/2026",
+  "cfEmittente": "CF0003",
+  "pivaEmittente": "PI0006",
+  "cfCliente": "CFC0001",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0007",
+  "dataFattura": "2026-08-03",
+  "dataAccoglienzaFile": "2026-08-04",
+  "denominazioneEmittente": "FORNITORE0007",
+  "denominazioneCliente": "CLIENTE0005",
+  "imponibile": "+000000000000,00",
+  "imposta": "+000000000000,00",
+  "fileDownload": {
+   "idInvio": "SDI0007",
+   "statoFile": "Consegnata"
+  },
+  "dataConsegna": "04/08/2026",
+  "pivaEmittente": "PI0007",
+  "cfCliente": "CFC0001",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0008",
+  "dataFattura": "2026-07-31",
+  "dataAccoglienzaFile": "2026-07-31",
+  "denominazioneEmittente": "FORNITORE0003",
+  "denominazioneCliente": "CLIENTE0003",
+  "imponibile": "+000000000010,06",
+  "imposta": "+000000000002,21",
+  "fileDownload": {
+   "idInvio": "SDI0008",
+   "statoFile": "Consegnata"
+  },
+  "dataConsegna": "31/07/2026",
+  "cfEmittente": "CF0001",
+  "pivaEmittente": "PI0003",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0009",
+  "dataFattura": "2026-07-28",
+  "dataAccoglienzaFile": "2026-07-30",
+  "denominazioneEmittente": "FORNITORE0005",
+  "denominazioneCliente": "CLIENTE0003",
+  "imponibile": "+000000000012,91",
+  "imposta": "+000000000001,29",
+  "fileDownload": {
+   "idInvio": "SDI0009",
+   "statoFile": "Consegnata"
+  },
+  "dataConsegna": "30/07/2026",
+  "cfEmittente": "CF0002",
+  "pivaEmittente": "PI0005",
+  "cfCliente": "CFC0001",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0010",
+  "dataFattura": "2026-07-26",
+  "dataAccoglienzaFile": "2026-07-27",
+  "denominazioneEmittente": "FORNITORE0008",
+  "denominazioneCliente": "CLIENTE0001",
+  "imponibile": "+000000000010,00",
+  "imposta": "+000000000001,00",
+  "fileDownload": {
+   "idInvio": "SDI0010",
+   "statoFile": "Consegnata"
+  },
+  "dataConsegna": "27/07/2026",
+  "cfEmittente": "CF0004",
+  "pivaEmittente": "PI0008",
+  "cfCliente": "CFC0001",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0011",
+  "dataFattura": "2026-07-18",
+  "dataAccoglienzaFile": "2026-07-24",
+  "denominazioneEmittente": "FORNITORE0009",
+  "denominazioneCliente": "CLIENTE0003",
+  "imponibile": "+000000000057,55",
+  "imposta": "+000000000005,76",
+  "fileDownload": {
+   "idInvio": "SDI0011",
+   "statoFile": "Consegnata"
+  },
+  "dataConsegna": "24/07/2026",
+  "pivaEmittente": "PI0009",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0012",
+  "dataFattura": "2026-07-21",
+  "dataAccoglienzaFile": "2026-07-24",
+  "denominazioneEmittente": "FORNITORE0009",
+  "denominazioneCliente": "CLIENTE0003",
+  "imponibile": "+000000000097,15",
+  "imposta": "+000000000009,71",
+  "fileDownload": {
+   "idInvio": "SDI0012",
+   "statoFile": "Consegnata"
+  },
+  "dataConsegna": "24/07/2026",
+  "pivaEmittente": "PI0009",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0013",
+  "dataFattura": "2026-07-21",
+  "dataAccoglienzaFile": "2026-07-23",
+  "denominazioneEmittente": "FORNITORE0005",
+  "denominazioneCliente": "CLIENTE0003",
+  "imponibile": "+000000000015,27",
+  "imposta": "+000000000001,53",
+  "fileDownload": {
+   "idInvio": "SDI0013",
+   "statoFile": "Consegnata"
+  },
+  "dataConsegna": "23/07/2026",
+  "cfEmittente": "CF0002",
+  "pivaEmittente": "PI0005",
+  "cfCliente": "CFC0001",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0014",
+  "dataFattura": "2026-07-18",
+  "dataAccoglienzaFile": "2026-07-20",
+  "denominazioneEmittente": "FORNITORE0008",
+  "denominazioneCliente": "CLIENTE0001",
+  "imponibile": "+000000000010,00",
+  "imposta": "+000000000001,00",
+  "fileDownload": {
+   "idInvio": "SDI0014",
+   "statoFile": "Consegnata"
+  },
+  "dataConsegna": "20/07/2026",
+  "cfEmittente": "CF0004",
+  "pivaEmittente": "PI0008",
+  "cfCliente": "CFC0001",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0015",
+  "dataFattura": "2026-07-16",
+  "dataAccoglienzaFile": "2026-07-20",
+  "denominazioneEmittente": "FORNITORE0010",
+  "denominazioneCliente": "CLIENTE0006",
+  "imponibile": "+000000000015,45",
+  "imposta": "+000000000001,55",
+  "fileDownload": {
+   "idInvio": "SDI0015",
+   "statoFile": "Consegnata"
+  },
+  "dataConsegna": "20/07/2026",
+  "cfEmittente": "CF0005",
+  "pivaEmittente": "PI0010",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0016",
+  "dataFattura": "2026-07-17",
+  "dataAccoglienzaFile": "2026-07-17",
+  "denominazioneEmittente": "FORNITORE0011",
+  "denominazioneCliente": "CLIENTE0003",
+  "imponibile": "+000000000009,33",
+  "imposta": "+000000000002,05",
+  "fileDownload": {
+   "idInvio": "SDI0016",
+   "statoFile": "Consegnata"
+  },
+  "dataConsegna": "17/07/2026",
+  "cfEmittente": "CF0006",
+  "pivaEmittente": "PI0011",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0017",
+  "dataFattura": "2026-07-13",
+  "dataAccoglienzaFile": "2026-07-17",
+  "denominazioneEmittente": "FORNITORE0009",
+  "denominazioneCliente": "CLIENTE0003",
+  "imponibile": "+000000000126,35",
+  "imposta": "+000000000012,63",
+  "fileDownload": {
+   "idInvio": "SDI0017",
+   "statoFile": "Consegnata"
+  },
+  "dataConsegna": "17/07/2026",
+  "pivaEmittente": "PI0009",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0018",
+  "dataFattura": "2026-07-14",
+  "dataAccoglienzaFile": "2026-07-16",
+  "denominazioneEmittente": "FORNITORE0005",
+  "denominazioneCliente": "CLIENTE0003",
+  "imponibile": "+000000000019,09",
+  "imposta": "+000000000001,91",
+  "fileDownload": {
+   "idInvio": "SDI0018",
+   "statoFile": "Consegnata"
+  },
+  "dataConsegna": "16/07/2026",
+  "cfEmittente": "CF0002",
+  "pivaEmittente": "PI0005",
+  "cfCliente": "CFC0001",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0019",
+  "dataFattura": "2026-07-15",
+  "dataAccoglienzaFile": "2026-07-16",
+  "denominazioneEmittente": "FORNITORE0004",
+  "denominazioneCliente": "CLIENTE0004",
+  "imponibile": "+000000000482,79",
+  "imposta": "+000000000106,21",
+  "fileDownload": {
+   "idInvio": "SDI0019",
+   "statoFile": "Consegnata"
+  },
+  "dataConsegna": "16/07/2026",
+  "pivaEmittente": "PI0004",
+  "cfCliente": "CFC0001",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0020",
+  "dataFattura": "2026-07-09",
+  "dataAccoglienzaFile": "2026-07-11",
+  "denominazioneEmittente": "FORNITORE0010",
+  "denominazioneCliente": "CLIENTE0006",
+  "imponibile": "+000000000016,82",
+  "imposta": "+000000000001,68",
+  "fileDownload": {
+   "idInvio": "SDI0020",
+   "statoFile": "Consegnata"
+  },
+  "dataConsegna": "11/07/2026",
+  "cfEmittente": "CF0005",
+  "pivaEmittente": "PI0010",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0021",
+  "dataFattura": "2026-07-07",
+  "dataAccoglienzaFile": "2026-07-09",
+  "denominazioneEmittente": "FORNITORE0005",
+  "denominazioneCliente": "CLIENTE0003",
+  "imponibile": "+000000000018,18",
+  "imposta": "+000000000001,82",
+  "fileDownload": {
+   "idInvio": "SDI0021",
+   "statoFile": "Consegnata"
+  },
+  "dataConsegna": "09/07/2026",
+  "cfEmittente": "CF0002",
+  "pivaEmittente": "PI0005",
+  "cfCliente": "CFC0001",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0022",
+  "dataFattura": "2026-07-02",
+  "dataAccoglienzaFile": "2026-07-08",
+  "denominazioneEmittente": "FORNITORE0010",
+  "denominazioneCliente": "CLIENTE0006",
+  "imponibile": "+000000000015,45",
+  "imposta": "+000000000001,55",
+  "fileDownload": {
+   "idInvio": "SDI0022",
+   "statoFile": "Consegnata"
+  },
+  "dataConsegna": "08/07/2026",
+  "cfEmittente": "CF0005",
+  "pivaEmittente": "PI0010",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura differita (TD24)",
+  "numeroFattura": "DOC0023",
+  "dataFattura": "2026-06-30",
+  "dataAccoglienzaFile": "2026-07-04",
+  "denominazioneEmittente": "FORNITORE0006",
+  "denominazioneCliente": "CLIENTE0003",
+  "imponibile": "+000000000196,23",
+  "imposta": "+000000000043,17",
+  "fileDownload": {
+   "idInvio": "SDI0023",
+   "statoFile": "Consegnata"
+  },
+  "dataConsegna": "04/07/2026",
+  "cfEmittente": "CF0003",
+  "pivaEmittente": "PI0006",
+  "cfCliente": "CFC0001",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0024",
+  "dataFattura": "2026-06-30",
+  "dataAccoglienzaFile": "2026-07-02",
+  "denominazioneEmittente": "FORNITORE0005",
+  "denominazioneCliente": "CLIENTE0003",
+  "imponibile": "+000000000029,55",
+  "imposta": "+000000000002,95",
+  "fileDownload": {
+   "idInvio": "SDI0024",
+   "statoFile": "Consegnata"
+  },
+  "dataConsegna": "02/07/2026",
+  "cfEmittente": "CF0002",
+  "pivaEmittente": "PI0005",
+  "cfCliente": "CFC0001",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0025",
+  "dataFattura": "2026-06-29",
+  "dataAccoglienzaFile": "2026-07-02",
+  "denominazioneEmittente": "FORNITORE0012",
+  "denominazioneCliente": "CLIENTE0004",
+  "imponibile": "+000000000033,54",
+  "imposta": "+000000000007,38",
+  "fileDownload": {
+   "idInvio": "SDI0025",
+   "statoFile": "Consegnata"
+  },
+  "dataConsegna": "02/07/2026",
+  "cfEmittente": "CF0007",
+  "pivaEmittente": "PI0012",
+  "pivaCliente": "PIC0001"
+ }
+]

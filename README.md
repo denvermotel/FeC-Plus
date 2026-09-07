@@ -14,6 +14,8 @@ Nasce come evoluzione del progetto `FeCscraper`, aggiungendo al core originale n
 * **Richieste massive:** fatture emesse/ricevute/messe a disposizione e corrispettivi (genera e invia l'XML all'AdE), con scaricamento dei risultati prodotti dal portale per le richieste già inviate.
 * **Anagrafica deleghe:** archivio locale dei clienti delegati, con import/export CSV.
 * **Esportazione Excel:** elenco fatture o corrispettivi in un file .xlsx, con riepilogo per aliquota/natura IVA.
+* **Accesso con SPID / CIE** oltre alle credenziali Entratel/Fisconline.
+* **Esportazione CSV formato Agenzia delle Entrate:** l'elenco fatture nello stesso formato del pulsante «Esporta la tabella» del portale, per la riconciliazione con i software di contabilità.
 * **Bolli virtuali:** riepilogo CSV (elenco A/B, importo, stato pagamento) per trimestre o anno intero.
 * **Cross-platform:** interfaccia grafica (tkinter) per Windows e macOS.
 
@@ -42,6 +44,7 @@ Il pulsante **«Installa dipendenze»** nella GUI esegue gli stessi passi di pip
 * `fec_download.py` - funzioni di download/invio a partire da una sessione già autenticata (libreria pura).
 * `fec_queue.py` - orchestrazione delle richieste (spezzettamento periodi lunghi in blocchi).
 * `fec_utility.py` - esportazione dell'elenco fatture/corrispettivi in Excel.
+* `fec_csv_ade.py` - ricostruzione del CSV «Esporta la tabella» dell'AdE (libreria pura).
 * `fec_deleghe.py` - anagrafica locale dei clienti delegati (CRUD e import/export CSV).
 * `fec_gui.py` - interfaccia grafica (schede Download Standard, Richieste Massive, Bolli, Utility, Deleghe).
 * `fec_cli.py` - **download da riga di comando** (senza GUI): login + scarico passando accesso e parametri come argomenti. Vedi la [Guida](https://denvermotel.github.io/FeC-Plus/guida.html).

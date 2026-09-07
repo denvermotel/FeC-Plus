@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# FeC-Plus - v0.03 alpha
+# FeC-Plus - v0.04 dev
 """
 fec_utility.py - Utility di riepilogo: export Excel «Elenco fatture».
 
@@ -15,6 +15,8 @@ Funzioni pubbliche:
     elenco_fatture_excel(auth, cf_cliente, piva, tipo, dal, al,
                          dest_dir=None, sottocartella=True,
                          control=None, log=print) -> str   # percorso xlsx
+    elenco_fatture_csv_ade(auth, cf_cliente, piva, tipo, dal, al,
+                           ...come sopra) -> str                  # percorso csv
     elenco_corrispettivi_excel(auth, cf_cliente, piva, dal, al,
                                ...come sopra) -> list[str] # un xlsx per matricola
 
@@ -39,7 +41,7 @@ rete, per cui si ritenta una volta prima di arrendersi (vedi
 
 from __future__ import annotations
 
-__version__ = "0.03 alpha"
+__version__ = "0.04 dev"
 
 import json
 import os
@@ -541,6 +543,47 @@ def elenco_fatture_excel(auth: AuthResult, cf_cliente: str, piva: str, tipo: str
                  ["Bollo Virtuale"], righe, titolo="Elenco fatture")
     log(f"\nElenco fatture generato ({len(righe)} righe, "
         f"{len(chiavi_pivot)} aliquote/nature).")
+    log(f"File: {percorso}")
+    return percorso
+
+
+def elenco_fatture_csv_ade(auth: AuthResult, cf_cliente: str, piva: str, tipo: str,
+                           dal: str, al: str, *, dest_dir: str | None = None,
+                           sottocartella: bool = True,
+                           control: "Controllo | None" = None, log=print) -> str:
+    """
+    Genera il CSV nel formato «Esporta la tabella» del portale AdE per il periodo
+    [dal, al] (GGMMAAAA) e ritorna il percorso del file creato.
+
+    A differenza di `elenco_fatture_excel` NON interroga il dettaglio delle
+    singole fatture: bastano le liste, quindi è pressoché istantaneo anche su
+    periodi ampi. Periodi > 3 mesi spezzati internamente; un solo file in output.
+    """
+    import fec_csv_ade
+
+    _, etichetta = TIPI_ELENCO.get(tipo, (None, tipo))
+    blocchi = spezza_periodo(dal, al, "%d%m%Y")
+    log(f"CSV Agenzia Entrate {etichetta} per {cf_cliente}  ({dal} -> {al})"
+        + (f"  [{len(blocchi)} blocchi]" if len(blocchi) > 1 else ""))
+
+    voci: list[dict] = []
+    for b_dal, b_al in blocchi:
+        if control:
+            control.check()
+        if len(blocchi) > 1:
+            log(f"  Blocco {b_dal} -> {b_al}: richiedo l'elenco...")
+        voci.extend(_lista_fatture(auth, tipo, b_dal, b_al))
+    log(f"Trovate {len(voci)} fatture nell'intervallo.")
+    if not voci:
+        raise NessunDato("Nessuna fattura trovata nell'intervallo richiesto: "
+                         "nessun file CSV generato.")
+
+    cartella = _cartella(dest_dir, "ElencoFatture", cf_cliente, sottocartella)
+    prefisso = (piva or cf_cliente).strip()
+    percorso = fec_csv_ade.scrivi_csv(
+        os.path.join(cartella, fec_csv_ade.nome_file(prefisso, dal, al, tipo)),
+        voci, tipo)
+    log(f"\nCSV generato ({len(voci)} righe).")
     log(f"File: {percorso}")
     return percorso
 

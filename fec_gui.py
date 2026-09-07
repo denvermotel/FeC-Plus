@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# FeC-Plus - v0.03 alpha
+# FeC-Plus - v0.04 dev
 """
 FEC GUI - Fatture Elettroniche e Corrispettivi
 Interfaccia grafica per il download fatture e corrispettivi dal portale AdE.
@@ -19,7 +19,7 @@ import sys
 
 import fec_deps
 
-__version__ = "0.03 alpha"
+__version__ = "0.04 dev"
 
 APP_NAME = "FeC-Plus"
 REPO_URL = "https://github.com/denvermotel/FeC-Plus"
@@ -92,18 +92,20 @@ def _periodi_generici():
 # Le 4 modalità di accesso utente-friendly (vedi ade_auth per il mapping tecnico verso
 # i profili numerici del wizard, costanti PROFILO_*).
 MODALITA_ACCESSO = ["Studio - Delega Cliente", "Studio - Cassetto proprio", "Azienda",
-                    "Libero professionista / Me stesso"]
+                    "Libero professionista / Me stesso", "Delega diretta"]
 
 _MODALITA_PROFILO = {
     "Studio - Delega Cliente": 1,   # PROFILO_STUDIO_CLIENTE
     "Studio - Cassetto proprio": 2,  # PROFILO_STUDIO_CASSETTO
     "Azienda": 4,                    # PROFILO_AZIENDA
     "Libero professionista / Me stesso": 3,  # PROFILO_ME_STESSO
+    "Delega diretta": 5,             # PROFILO_DELEGA_DIRETTA (soggetto in «CF Cliente»)
 }
 
 
 # Etichette del menù a tendina «Backend di login» (solo DEV_MODE, box credenziali).
-_BACKEND_LABELS = {"browser": "Browser (Playwright)", "requests": "Solo requests"}
+_BACKEND_LABELS = {"browser": "Browser (Playwright)", "requests": "Solo requests",
+                   "sso": "SPID / CIE (browser)"}
 _BACKEND_DA_LABEL = {v: k for k, v in _BACKEND_LABELS.items()}
 
 
@@ -143,6 +145,11 @@ TIPO_STD_KEY = {
 }
 
 
+# Nomi di default delle due etichette utente della tab Deleghe (rinominabili dalle
+# Impostazioni; è una preferenza di sola GUI salvata in fec_settings.json).
+ETICHETTE_DELEGHE_DEFAULT = {"campo1": "Etichetta 1", "campo2": "Etichetta 2"}
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 class FecGui:
 
@@ -168,21 +175,30 @@ class FecGui:
         self.cfstudio_var = tk.StringVar()
         self.modalita     = tk.StringVar(value=MODALITA_ACCESSO[0])
 
-        self.backend_var  = tk.StringVar(value="browser")  # browser | requests
+        self.backend_var  = tk.StringVar(value="browser")  # browser | requests | sso
+        self.sso_var      = tk.BooleanVar(value=False)     # accesso con SPID/CIE
         self.backend_label_var = tk.StringVar(value=_BACKEND_LABELS["browser"])  # combo DEV_MODE
         self.headless_var = tk.BooleanVar(value=True)  # browser nascosto di default
         self.salva_cred_var = tk.BooleanVar(value=True)  # «non salvare credenziali»
         # Sezione «Credenziali Entratel» comprimibile (risparmio spazio, in attesa del
         # redesign GUI): True = espansa (default). Persistita in fec_settings.json.
         self.cred_espanse_var = tk.BooleanVar(value=True)
+        # Sezione «Cartelle per tipo di documento» nelle Impostazioni: comprimibile con un
+        # pulsante. Di default COMPRESSA (occupa molto spazio). Persistita in fec_settings.json.
+        self.cartelle_espanse_var = tk.BooleanVar(value=False)
         # Se True disabilita l'aggiornamento automatico dell'anagrafica deleghe da AdE
         # durante il download (nessun recupero né popup). Vedi tab Deleghe.
         self.deleghe_no_update_var = tk.BooleanVar(value=False)
+        # Nomi (solo GUI) delle due etichette libere della tab Deleghe, rinominabili
+        # dalle Impostazioni e persistiti in fec_settings.json.
+        self.etichetta1_var = tk.StringVar(value=ETICHETTE_DELEGHE_DEFAULT["campo1"])
+        self.etichetta2_var = tk.StringVar(value=ETICHETTE_DELEGHE_DEFAULT["campo2"])
 
         # Scheda Download Standard (creati qui per poterli popolare da _load_config)
         self.std_destdir = tk.StringVar(value=DEFAULT_DEST_DIR)
         self.std_escludi_scartate = tk.BooleanVar(value=True)
         self.std_estrai_p7m = tk.BooleanVar(value=False)
+        self.std_csv_ade = tk.BooleanVar(value=False)
         # Tipo documento "Fatture Emesse"/"Fatture Ricevute": aggiunge in coda,
         # sullo stesso periodo, rispettivamente le transfrontaliere emesse e le
         # messe a disposizione (checkbox visibili solo col tipo pertinente).
@@ -190,6 +206,8 @@ class FecGui:
         self.std_includi_disposizione = tk.BooleanVar(value=False)
         # Estrae automaticamente lo zip dei risultati delle Richieste Massive.
         self.estrai_zip_risultati_massivi = tk.BooleanVar(value=False)
+        # Popup di conferma a fine operazione (con «Apri cartella»); disattivabile.
+        self.popup_fine_task = tk.BooleanVar(value=True)
 
         # Cartelle per tipo di documento (popolate da _load_config): per ogni classe
         # path (override), «personalizza» e «senza sottocartella». Vuoto ⇒ usa std_destdir.
@@ -250,12 +268,21 @@ class FecGui:
         self.std_destdir.set(cfg.get("std_destdir", DEFAULT_DEST_DIR) or DEFAULT_DEST_DIR)
         self.salva_cred_var.set(bool(cfg.get("salva_credenziali", True)))
         self.cred_espanse_var.set(bool(cfg.get("cred_espanse", True)))
+        self.cartelle_espanse_var.set(bool(cfg.get("cartelle_espanse", False)))
         self.deleghe_no_update_var.set(bool(cfg.get("deleghe_no_update", False)))
+        et = cfg.get("etichette_deleghe", {}) or {}
+        self.etichetta1_var.set(str(et.get("campo1", "") or "").strip()
+                                or ETICHETTE_DELEGHE_DEFAULT["campo1"])
+        self.etichetta2_var.set(str(et.get("campo2", "") or "").strip()
+                                or ETICHETTE_DELEGHE_DEFAULT["campo2"])
         self.std_escludi_scartate.set(bool(cfg.get("std_escludi_scartate_pa", True)))
         self.std_estrai_p7m.set(bool(cfg.get("std_estrai_p7m", False)))
+        self.std_csv_ade.set(bool(cfg.get("std_csv_ade", False)))
+        self.sso_var.set(bool(cfg.get("login_sso", False)))
         self.std_includi_trans.set(bool(cfg.get("std_includi_trans", False)))
         self.std_includi_disposizione.set(bool(cfg.get("std_includi_disposizione", False)))
         self.estrai_zip_risultati_massivi.set(bool(cfg.get("estrai_zip_risultati_massivi", False)))
+        self.popup_fine_task.set(bool(cfg.get("popup_fine_task", True)))
         # Posizione del divisore console/tab (px dal bordo alto del PanedWindow), o None.
         val = cfg.get("console_sash", None)
         self.console_sash = int(val) if isinstance(val, (int, float)) and val > 0 else None
@@ -297,12 +324,25 @@ class FecGui:
             "deleghe_no_update": bool(self.deleghe_no_update_var.get()),
             "std_escludi_scartate_pa": bool(self.std_escludi_scartate.get()),
             "std_estrai_p7m": bool(self.std_estrai_p7m.get()),
+            "std_csv_ade": bool(self.std_csv_ade.get()),
+            "login_sso": bool(self.sso_var.get()),
             "std_includi_trans": bool(self.std_includi_trans.get()),
             "std_includi_disposizione": bool(self.std_includi_disposizione.get()),
             "cred_espanse": bool(self.cred_espanse_var.get()),
+            "cartelle_espanse": bool(self.cartelle_espanse_var.get()),
             "estrai_zip_risultati_massivi": bool(self.estrai_zip_risultati_massivi.get()),
+            "popup_fine_task": bool(self.popup_fine_task.get()),
+            "etichette_deleghe": {
+                "campo1": self.etichetta1_var.get().strip()
+                          or ETICHETTE_DELEGHE_DEFAULT["campo1"],
+                "campo2": self.etichetta2_var.get().strip()
+                          or ETICHETTE_DELEGHE_DEFAULT["campo2"],
+            },
         })
         self._update_dest_info()
+        # Applica subito i nuovi nomi etichetta alla tab Deleghe, se già costruita.
+        if hasattr(self, "deleghe_tree"):
+            self._deleghe_applica_nomi_etichette()
         if salva:
             messagebox.showinfo(
                 "Salvato",
@@ -555,12 +595,19 @@ class FecGui:
         frame.columnconfigure(0, weight=1)
 
         # Barra comprimi/espandi (risparmio spazio): sempre visibile, comanda la
-        # visibilità di _cred_content.
+        # visibilità di _cred_content. Da compresa mostra comunque «Informazioni» e
+        # «Impostazioni» (altrimenti sarebbero irraggiungibili, stanno in _cred_content).
         bar = ttk.Frame(frame)
         bar.grid(row=0, column=0, sticky="ew")
         bar.columnconfigure(0, weight=1)
+        self._cred_bar_info_btn = ttk.Button(bar, text="ℹ  Informazioni",
+                                             command=self._show_about, width=16)
+        self._cred_bar_info_btn.grid(row=0, column=1, sticky="e", padx=(0, 6))
+        self._cred_bar_settings_btn = ttk.Button(bar, text="⚙  Impostazioni",
+                                                 command=self._show_settings, width=16)
+        self._cred_bar_settings_btn.grid(row=0, column=2, sticky="e", padx=(0, 6))
         self._cred_toggle_btn = ttk.Button(bar, command=self._toggle_credenziali, width=16)
-        self._cred_toggle_btn.grid(row=0, column=1, sticky="e")
+        self._cred_toggle_btn.grid(row=0, column=3, sticky="e")
 
         self._cred_content = ttk.Frame(frame)
         self._cred_content.grid(row=1, column=0, sticky="ew", pady=(6, 0))
@@ -573,14 +620,16 @@ class FecGui:
             ("Password:",       self.pwd_var,      True),
             ("CF Studio:",      self.cfstudio_var, False),
         ]
+        self._cred_entries = []
         for idx, (lbl, var, secret) in enumerate(fields):
             label = ttk.Label(self._cred_content, text=lbl)
             label.grid(row=0, column=idx * 2, sticky="w", padx=(4, 2))
             if lbl == "CF Studio:":
                 self._cfstudio_label = label
-            ttk.Entry(self._cred_content, textvariable=var, width=16,
-                      show="●" if secret else "").grid(
-                row=0, column=idx * 2 + 1, sticky="ew", padx=(0, 8))
+            entry = ttk.Entry(self._cred_content, textvariable=var, width=16,
+                              show="●" if secret else "")
+            entry.grid(row=0, column=idx * 2 + 1, sticky="ew", padx=(0, 8))
+            self._cred_entries.append(entry)
 
         btn_frame = ttk.Frame(self._cred_content)
         btn_frame.grid(row=0, column=8, rowspan=4, padx=(6, 4))
@@ -598,6 +647,15 @@ class FecGui:
             row=1, column=1, columnspan=3, sticky="w", pady=(6, 0))
         self.modalita.trace_add("write", self._aggiorna_etichetta_cfstudio)
         self._aggiorna_etichetta_cfstudio()
+
+        # Accesso con identità digitale: sostituisce le credenziali Entratel, che
+        # restano vuote. Il login avviene a mano nel browser presso l'Identity Provider.
+        ttk.Checkbutton(
+            self._cred_content,
+            text="Accedi con SPID / CIE (si apre il browser)",
+            variable=self.sso_var, command=self._toggle_sso,
+        ).grid(row=1, column=4, columnspan=4, sticky="w", padx=(12, 0), pady=(6, 0))
+        self._aggiorna_campi_sso()   # riflette l'impostazione salvata
 
         if DEV_MODE:  # backend di login: irrilevante per la GUI pubblica (forzata su requests)
             ttk.Label(self._cred_content, text="Backend di login:").grid(
@@ -635,13 +693,19 @@ class FecGui:
 
     def _apply_cred_espanse(self):
         """Mostra/nasconde il contenuto della sezione credenziali secondo
-        `cred_espanse_var`, senza persistere (usato anche all'avvio)."""
+        `cred_espanse_var`, senza persistere (usato anche all'avvio). Da compresa i
+        pulsanti «Informazioni»/«Impostazioni» restano nella barra, altrimenti sono già
+        nel contenuto e vanno nascosti dalla barra per non duplicarli."""
         if bool(self.cred_espanse_var.get()):
             self._cred_content.grid()
             self._cred_toggle_btn.configure(text="▲  Comprimi")
+            self._cred_bar_info_btn.grid_remove()
+            self._cred_bar_settings_btn.grid_remove()
         else:
             self._cred_content.grid_remove()
             self._cred_toggle_btn.configure(text="▼  Espandi")
+            self._cred_bar_info_btn.grid()
+            self._cred_bar_settings_btn.grid()
 
     def _toggle_credenziali(self):
         """Comprimi/espandi la sezione credenziali (risparmio spazio) e ricorda la
@@ -708,6 +772,19 @@ class FecGui:
         self._build_cartelle_classi(frm, r)
 
         r += 1
+        etbox = ttk.LabelFrame(frm, text=" Etichette anagrafiche (tab Deleghe) ", padding=(10, 6))
+        etbox.grid(row=r, column=0, columnspan=3, sticky="we", pady=(8, 4))
+        etbox.columnconfigure(1, weight=1)
+        etbox.columnconfigure(3, weight=1)
+        ttk.Label(etbox, text="Nomi dei due campi liberi con cui taggare le anagrafiche "
+                              "(solo visualizzazione).", foreground="#777",
+                  wraplength=520).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 6))
+        ttk.Label(etbox, text="Etichetta 1:").grid(row=1, column=0, sticky="w", padx=(0, 6))
+        ttk.Entry(etbox, textvariable=self.etichetta1_var, width=22).grid(row=1, column=1, sticky="we", padx=(0, 12))
+        ttk.Label(etbox, text="Etichetta 2:").grid(row=1, column=2, sticky="w", padx=(0, 6))
+        ttk.Entry(etbox, textvariable=self.etichetta2_var, width=22).grid(row=1, column=3, sticky="we")
+
+        r += 1
         ttk.Checkbutton(frm, text="Non salvare le credenziali su questo computer",
                         variable=self.salva_cred_var, onvalue=False, offvalue=True).grid(
             row=r, column=0, columnspan=3, sticky="w", pady=(8, 0))
@@ -716,6 +793,12 @@ class FecGui:
         ttk.Checkbutton(frm, text="Estrai automaticamente lo zip dei risultati delle "
                                   "Richieste Massive",
                         variable=self.estrai_zip_risultati_massivi).grid(
+            row=r, column=0, columnspan=3, sticky="w", pady=(4, 0))
+
+        r += 1
+        ttk.Checkbutton(frm, text="Mostra popup di conferma a fine operazione "
+                                  "(con pulsante «Apri cartella»)",
+                        variable=self.popup_fine_task).grid(
             row=r, column=0, columnspan=3, sticky="w", pady=(4, 0))
 
         r += 1
@@ -756,21 +839,38 @@ class FecGui:
 
     def _build_cartelle_classi(self, frm: ttk.Widget, row: int):
         """Sezione «Cartelle per tipo di documento»: per ogni classe un override di
-        cartella («personalizza» + path + Sfoglia) e l'opzione «senza sottocartella»."""
+        cartella («personalizza» + path + Sfoglia) e l'opzione «senza sottocartella».
+        L'intero elenco è comprimibile con un pulsante (occupa molto spazio verticale)."""
         box = ttk.LabelFrame(frm, text=" Cartelle per tipo di documento ", padding=(10, 6))
         box.grid(row=row, column=0, columnspan=3, sticky="we", pady=(8, 4))
-        box.columnconfigure(2, weight=1)
+        box.columnconfigure(0, weight=1)
 
-        ttk.Label(box, text="Spunta «personalizza» per assegnare una cartella diversa "
-                            "dalla default; «senza sottocartella» salva i file direttamente "
-                            "nella cartella (utile per i gestionali).",
+        # Intestazione con il pulsante comprimi/espandi allineato a destra.
+        header = ttk.Frame(box)
+        header.grid(row=0, column=0, sticky="ew")
+        header.columnconfigure(0, weight=1)
+        ttk.Label(header, text="Cartelle personalizzate per tipo di documento",
+                  foreground="#555").grid(row=0, column=0, sticky="w")
+        self._cartelle_toggle_btn = ttk.Button(header, width=14,
+                                               command=self._toggle_cartelle)
+        self._cartelle_toggle_btn.grid(row=0, column=1, sticky="e")
+
+        # Contenuto collassabile: descrizione + una riga per ciascuna classe.
+        inner = ttk.Frame(box)
+        inner.grid(row=1, column=0, sticky="we", pady=(6, 0))
+        inner.columnconfigure(2, weight=1)
+        self._cartelle_inner = inner
+
+        ttk.Label(inner, text="Spunta «personalizza» per assegnare una cartella diversa "
+                              "dalla default; «senza sottocartella» salva i file direttamente "
+                              "nella cartella (utile per i gestionali).",
                   foreground="#777", wraplength=520).grid(
             row=0, column=0, columnspan=5, sticky="w", pady=(0, 6))
 
         for i, (key, label) in enumerate(DOC_CLASSI, start=1):
             v = self.dirclassi[key]
-            entry = ttk.Entry(box, textvariable=v["path"], width=34)
-            btn = ttk.Button(box, text="Sfoglia…", width=10,
+            entry = ttk.Entry(inner, textvariable=v["path"], width=34)
+            btn = ttk.Button(inner, text="Sfoglia…", width=10,
                              command=lambda k=key: self._pick_classe_dir(k))
 
             def _toggle(k=key, e=entry, b=btn):
@@ -782,14 +882,38 @@ class FecGui:
                 e.configure(state=st)
                 b.configure(state=st)
 
-            ttk.Checkbutton(box, text="personalizza", variable=v["personalizza"],
+            ttk.Checkbutton(inner, text="personalizza", variable=v["personalizza"],
                             command=_toggle).grid(row=i, column=0, sticky="w", padx=(0, 6), pady=1)
-            ttk.Label(box, text=label, width=20).grid(row=i, column=1, sticky="w", padx=(0, 6))
+            ttk.Label(inner, text=label, width=20).grid(row=i, column=1, sticky="w", padx=(0, 6))
             entry.grid(row=i, column=2, sticky="we", padx=(0, 4))
             btn.grid(row=i, column=3, padx=(0, 8))
-            ttk.Checkbutton(box, text="senza sottocartella",
+            ttk.Checkbutton(inner, text="senza sottocartella",
                             variable=v["senza_sotto"]).grid(row=i, column=4, sticky="w")
             _toggle()  # stato iniziale entry/btn coerente con «personalizza»
+
+        self._apply_cartelle_espanse()  # applica lo stato salvato (espansa/compressa)
+
+    def _apply_cartelle_espanse(self):
+        """Mostra/nasconde l'elenco cartelle secondo `cartelle_espanse_var` (no persist)."""
+        if bool(self.cartelle_espanse_var.get()):
+            self._cartelle_inner.grid()
+            self._cartelle_toggle_btn.configure(text="▲  Comprimi")
+        else:
+            self._cartelle_inner.grid_remove()
+            self._cartelle_toggle_btn.configure(text="▼  Espandi")
+
+    def _toggle_cartelle(self):
+        """Comprimi/espandi l'elenco «Cartelle per tipo di documento» e ricorda la scelta
+        (merge nelle preferenze, senza toccare le credenziali salvate)."""
+        self.cartelle_espanse_var.set(not bool(self.cartelle_espanse_var.get()))
+        self._apply_cartelle_espanse()
+        try:
+            import fec_store
+            cfg = fec_store.load_settings()
+            cfg["cartelle_espanse"] = bool(self.cartelle_espanse_var.get())
+            fec_store.save_settings(cfg)
+        except Exception:
+            pass
 
     def _pick_classe_dir(self, key: str):
         v = self.dirclassi[key]
@@ -989,7 +1113,7 @@ class FecGui:
         Tutto gira in un worker thread, con log instradato nella console.
         """
         cf, pin, pwd, cfst = self._get_creds()
-        backend  = self.backend_var.get()
+        backend  = self._backend_attivo()
         headless = bool(self.headless_var.get())
 
         # Controllo pausa/annulla per QUESTA operazione (creato sul thread Tk così i
@@ -1028,7 +1152,7 @@ class FecGui:
                     log(f"⚠️  Aggiornamento anagrafica non riuscito: {exc}")
 
             try:
-                operazione(res, log, fec_queue, control)
+                esito = operazione(res, log, fec_queue, control)
             except fec_download.DownloadAnnullato as exc:
                 log(f"\n⏹  {exc}")
                 return
@@ -1036,8 +1160,84 @@ class FecGui:
                 log(f"\n❌ Operazione non riuscita: {exc}")
                 return
             log("\n[Completato]")
+            if self.popup_fine_task.get():
+                cartelle = self._cartelle_da_esito(esito)
+                self.root.after(0, self._conferma_completato, descrizione, cartelle)
 
         self._run_inprocess(task)
+
+    @staticmethod
+    def _cartelle_da_esito(esito) -> list[str]:
+        """
+        Cartelle di destinazione da mostrare nel popup di fine operazione, estratte
+        (in modo difensivo) da ciò che l'`operazione` ritorna: DownloadResult
+        (attributo `cartella`), percorsi di file/cartelle esistenti (stringhe),
+        liste/tuple anche annidate di questi. Tutto il resto (None, codici richiesta
+        delle massive, ...) viene ignorato. Ordine preservato, senza duplicati.
+        """
+        cartelle: list[str] = []
+
+        def _aggiungi(c: str):
+            if c and os.path.isdir(c) and c not in cartelle:
+                cartelle.append(c)
+
+        def _visita(nodo):
+            if nodo is None:
+                return
+            if isinstance(nodo, (list, tuple, set)):
+                for v in nodo:
+                    _visita(v)
+                return
+            cartella = getattr(nodo, "cartella", None)     # DownloadResult
+            if cartella:
+                _aggiungi(str(cartella))
+                return
+            if isinstance(nodo, str):
+                if os.path.isdir(nodo):
+                    _aggiungi(nodo)
+                elif os.path.isfile(nodo):                  # es. percorso .xlsx
+                    _aggiungi(os.path.dirname(nodo))
+
+        _visita(esito)
+        return cartelle
+
+    def _conferma_completato(self, descrizione: str, cartelle: list[str]):
+        """
+        Popup di conferma a fine operazione, con un pulsante «Apri cartella» per
+        ciascuna cartella di destinazione (aperta in Esplora risorse). Senza
+        cartelle note si limita al messaggio di completamento.
+        """
+        win = tk.Toplevel(self.root)
+        win.title("Operazione completata")
+        win.transient(self.root)
+        win.resizable(False, False)
+        frm = ttk.Frame(win, padding=16)
+        frm.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(frm, text=f"✅  {descrizione}: operazione completata.",
+                  font=("", 10, "bold")).pack(anchor="w")
+
+        if cartelle:
+            ttk.Label(frm, text="File salvati in:").pack(anchor="w", pady=(10, 2))
+            for cartella in cartelle:
+                riga = ttk.Frame(frm)
+                riga.pack(fill=tk.X, pady=2)
+                ttk.Button(riga, text="📂  Apri cartella", width=16,
+                           command=lambda c=cartella: os.startfile(c)).pack(side=tk.LEFT)
+                ttk.Label(riga, text=cartella, foreground="#555",
+                          wraplength=420, justify="left").pack(side=tk.LEFT, padx=(8, 0))
+
+        ttk.Button(frm, text="Chiudi", command=win.destroy).pack(pady=(14, 0))
+        win.bind("<Escape>", lambda _e: win.destroy())
+        win.bind("<Return>", lambda _e: win.destroy())
+
+        # Centro il popup sulla finestra principale.
+        win.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_width()) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - win.winfo_height()) // 3
+        win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        win.grab_set()
+        win.focus_set()
 
     # ── Generic widget helpers ────────────────────────────────────────────────
 
@@ -1048,10 +1248,15 @@ class FecGui:
         return f
 
     @staticmethod
-    def _row(frame, row: int, label: str, var: tk.StringVar, width: int = 22, show: str = "") -> ttk.Entry:
-        ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=4, padx=(0, 8))
+    def _row(frame, row: int, label: str, var: tk.StringVar, width: int = 22, show: str = "",
+             col: int = 0) -> ttk.Entry:
+        """Label + Entry su una riga. `col` = colonna di partenza (label a `col`, entry a
+        `col+1`), per comporre form a più colonne. La label di una colonna diversa dalla
+        prima prende un margine sinistro per staccare i due gruppi."""
+        padx = (0, 8) if col == 0 else (24, 8)
+        ttk.Label(frame, text=label).grid(row=row, column=col, sticky="w", pady=4, padx=padx)
         entry = ttk.Entry(frame, textvariable=var, width=width, show=show)
-        entry.grid(row=row, column=1, sticky="w")
+        entry.grid(row=row, column=col + 1, sticky="w")
         return entry
 
     @staticmethod
@@ -1267,7 +1472,49 @@ class FecGui:
             self.cfstudio_var.get().strip(),
         )
 
+    def _toggle_sso(self):
+        """Reazione al clic sulla spunta «Accedi con SPID / CIE»: aggiorna i campi e,
+        se Playwright manca, lo dice subito invece di far fallire il login dopo."""
+        self._aggiorna_campi_sso()
+        if self._sso_attivo() and "playwright" in fec_deps.find_missing().get("browser", []):
+            messagebox.showwarning(
+                "Dipendenza mancante",
+                "L'accesso con SPID/CIE apre un browser Chromium e richiede il pacchetto "
+                "«playwright», che non risulta installato.\n\n"
+                "Usa «Installa dipendenze» nel riquadro credenziali, oppure togli la "
+                "spunta e accedi con le credenziali Entratel.")
+
+    def _aggiorna_campi_sso(self):
+        """Con SPID/CIE i campi Entratel non servono: si disabilitano, così è chiaro
+        che non vanno compilati. Il valore digitato resta, non viene cancellato."""
+        stato = "disabled" if self._sso_attivo() else "normal"
+        # I primi tre campi sono CF, PIN e Password: con SPID/CIE non servono.
+        # «CF Studio» (il quarto) resta ATTIVO: serve comunque a individuare
+        # l'incarico nel wizard, anche dopo un accesso SSO, e senza di lui un
+        # utente con più incarichi non riuscirebbe a scegliere.
+        for entry in getattr(self, "_cred_entries", [])[:3]:
+            try:
+                entry.configure(state=stato)
+            except Exception:
+                pass
+
+    def _sso_attivo(self) -> bool:
+        """True se l'utente ha scelto l'accesso con SPID/CIE (niente credenziali
+        Entratel: l'autenticazione avviene nel browser presso l'Identity Provider)."""
+        try:
+            return bool(self.sso_var.get())
+        except Exception:
+            return False
+
+    def _backend_attivo(self) -> str:
+        """Backend di login da usare: «sso» prevale sulla scelta del combo DEV."""
+        return "sso" if self._sso_attivo() else self.backend_var.get()
+
     def _validate(self, **named_values) -> bool:
+        if self._sso_attivo():
+            # Con SPID/CIE le credenziali Entratel non servono e i campi restano vuoti.
+            for campo in ("CF", "Nome utente/CF", "PIN", "Password", "CF Studio"):
+                named_values.pop(campo, None)
         missing = [lbl for lbl, val in named_values.items() if not str(val).strip()]
         if missing:
             messagebox.showerror(
@@ -1433,7 +1680,7 @@ class FecGui:
         cfcl    = self.tl_cfcl.get().strip()
         piva    = self.tl_piva.get().strip()
         profilo = _profilo_da_modalita(self.modalita.get())
-        backend = self.backend_var.get()
+        backend = self._backend_attivo()
         headless = bool(self.headless_var.get())
 
         if not self._validate(**{"Nome utente/CF": cf, "PIN": pin, "Password": pwd}):
@@ -1536,20 +1783,50 @@ class FecGui:
 
     # ── Scheda «Deleghe» - anagrafica locale ───────────────────────────
 
-    # Etichette delle colonne mostrate nel Treeview (ordine = fec_deleghe.FIELDS).
+    # Etichette delle colonne mostrate nel Treeview. La colonna `codice_destinatario`
+    # mostra il «Canale ricezione» (codice SDI o, in mancanza, la PEC). Le intestazioni
+    # di `etichetta1`/`etichetta2` sono dinamiche (nomi utente), impostate a runtime.
     _DELEGHE_COLS = (
         ("denominazione", "Denominazione", 200),
         ("codice_fiscale", "Codice fiscale", 130),
         ("partita_iva", "Partita IVA", 110),
         ("data_fine_delega", "Fine delega", 90),
         ("conservazione", "Conserv.", 70),
-        ("codice_destinatario", "Cod. dest.", 80),
+        ("codice_destinatario", "Canale ricezione", 150),
+        ("etichetta1", "Etichetta 1", 110),
+        ("etichetta2", "Etichetta 2", 110),
     )
+
+    # Voce «nessun filtro» nelle due tendine di filtro per etichetta.
+    _FILTRO_TUTTE = "(tutte)"
+
+    # Glifi della colonna checkbox di selezione (cella e intestazione «tutte»).
+    _SEL_ON = "☑"
+    _SEL_OFF = "☐"
+
+    # Colonne con filtro a tendina tipo Excel sull'intestazione (invece dell'ordinamento).
+    _DELEGHE_COL_FILTRO = ("conservazione", "codice_destinatario")
+    # Indicatore di filtro attivo aggiunto all'intestazione della colonna.
+    _FILTRO_ON = " ▾"
+
+    @staticmethod
+    def _deleghe_canale(row: dict) -> str:
+        """Valore del «Canale ricezione»: codice SDI se presente, altrimenti la PEC."""
+        return row.get("codice_destinatario", "") or row.get("pec", "")
 
     def _tab_deleghe(self, nb: ttk.Notebook):
         import fec_deleghe
         self._deleghe = fec_deleghe
         self.deleghe_rows = fec_deleghe.load_deleghe()
+        # Nomi etichette dalle preferenze (rinominabili dalle Impostazioni).
+        self.deleghe_etichette = {"campo1": self.etichetta1_var.get().strip()
+                                            or ETICHETTE_DELEGHE_DEFAULT["campo1"],
+                                  "campo2": self.etichetta2_var.get().strip()
+                                            or ETICHETTE_DELEGHE_DEFAULT["campo2"]}
+        # CF (maiuscolo) delle anagrafiche spuntate con la checkbox di selezione.
+        self.deleghe_checked: set[str] = set()
+        # Filtri a tendina tipo Excel: col_key -> set dei valori (display) ammessi.
+        self.deleghe_col_filtri: dict[str, set] = {}
 
         tab = ttk.Frame(nb)
         nb.add(tab, text="  Deleghe  ")
@@ -1557,80 +1834,297 @@ class FecGui:
         f.columnconfigure(0, weight=1)
         f.rowconfigure(0, weight=1)
 
+        # Riquadro ridimensionabile: sopra la tabella (ricerca + filtri + elenco),
+        # sotto il form e i bottoni. L'utente trascina il sash per adattarsi allo schermo.
+        paned = ttk.PanedWindow(f, orient="vertical")
+        paned.grid(row=0, column=0, sticky="nsew")
+
+        top = ttk.Frame(paned)
+        top.columnconfigure(0, weight=1)
+        top.rowconfigure(1, weight=1)
+        paned.add(top, weight=4)
+
+        # ── Barra ricerca + filtri per etichetta ──
+        ctrl = ttk.Frame(top)
+        ctrl.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        self.deleghe_search = tk.StringVar()
+        self.deleghe_filtro1 = tk.StringVar(value=self._FILTRO_TUTTE)
+        self.deleghe_filtro2 = tk.StringVar(value=self._FILTRO_TUTTE)
+        ttk.Label(ctrl, text="Cerca:").pack(side=tk.LEFT)
+        ent = ttk.Entry(ctrl, textvariable=self.deleghe_search, width=28)
+        ent.pack(side=tk.LEFT, padx=(6, 16))
+        self.deleghe_lbl_filtro1 = ttk.Label(ctrl, text=self.deleghe_etichette["campo1"] + ":")
+        self.deleghe_lbl_filtro1.pack(side=tk.LEFT)
+        self.deleghe_cb1 = ttk.Combobox(ctrl, textvariable=self.deleghe_filtro1,
+                                        state="readonly", width=16)
+        self.deleghe_cb1.pack(side=tk.LEFT, padx=(6, 16))
+        self.deleghe_lbl_filtro2 = ttk.Label(ctrl, text=self.deleghe_etichette["campo2"] + ":")
+        self.deleghe_lbl_filtro2.pack(side=tk.LEFT)
+        self.deleghe_cb2 = ttk.Combobox(ctrl, textvariable=self.deleghe_filtro2,
+                                        state="readonly", width=16)
+        self.deleghe_cb2.pack(side=tk.LEFT, padx=(6, 0))
+        self.deleghe_search.trace_add("write", lambda *_: self._deleghe_refresh())
+        self.deleghe_cb1.bind("<<ComboboxSelected>>", lambda _e: self._deleghe_refresh())
+        self.deleghe_cb2.bind("<<ComboboxSelected>>", lambda _e: self._deleghe_refresh())
+
         # ── Tabella ──
-        tree_box = ttk.Frame(f)
-        tree_box.grid(row=0, column=0, sticky="nsew")
+        tree_box = ttk.Frame(top)
+        tree_box.grid(row=1, column=0, sticky="nsew")
         tree_box.columnconfigure(0, weight=1)
         tree_box.rowconfigure(0, weight=1)
 
-        cols = [c[0] for c in self._DELEGHE_COLS]
+        # Prima colonna «_sel» = checkbox di selezione; la sua intestazione fa da
+        # «seleziona/deseleziona tutte le visibili». Le altre colonne restano ordinabili.
+        cols = ["_sel"] + [c[0] for c in self._DELEGHE_COLS]
         self.deleghe_tree = ttk.Treeview(tree_box, columns=cols, show="headings", height=12)
+        self.deleghe_tree.heading("_sel", text=self._SEL_OFF,
+                                  command=self._deleghe_toggle_all)
+        self.deleghe_tree.column("_sel", width=34, minwidth=34, anchor="center", stretch=False)
         for key, label, width in self._DELEGHE_COLS:
-            self.deleghe_tree.heading(key, text=label,
-                                      command=lambda k=key: self._deleghe_sort(k))
+            # «Conservazione» e «Canale ricezione» hanno un filtro a tendina tipo Excel
+            # sull'intestazione; le altre colonne ordinano al click.
+            if key in self._DELEGHE_COL_FILTRO:
+                cmd = lambda k=key: self._deleghe_apri_filtro_colonna(k)
+            else:
+                cmd = lambda k=key: self._deleghe_sort(k)
+            self.deleghe_tree.heading(key, text=label, command=cmd)
             anchor = "center" if key in ("data_fine_delega", "conservazione") else "w"
             self.deleghe_tree.column(key, width=width, anchor=anchor)
         self.deleghe_tree.grid(row=0, column=0, sticky="nsew")
         vsb = ttk.Scrollbar(tree_box, orient="vertical", command=self.deleghe_tree.yview)
         vsb.grid(row=0, column=1, sticky="ns")
-        self.deleghe_tree.configure(yscrollcommand=vsb.set)
+        hsb = ttk.Scrollbar(tree_box, orient="horizontal", command=self.deleghe_tree.xview)
+        hsb.grid(row=1, column=0, sticky="ew")
+        self.deleghe_tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
         self.deleghe_tree.bind("<<TreeviewSelect>>", self._deleghe_on_select)
+        self.deleghe_tree.bind("<Button-3>", self._deleghe_context_menu)
+        self.deleghe_tree.bind("<Button-1>", self._deleghe_on_click, add="+")
+
+        bottom = ttk.Frame(paned)
+        bottom.columnconfigure(0, weight=1)
+        paned.add(bottom, weight=1)
 
         # ── Form ──
-        form = ttk.LabelFrame(f, text=" Riga ", padding=(12, 8))
-        form.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        form = ttk.LabelFrame(bottom, text=" Riga ", padding=(12, 8))
+        form.grid(row=0, column=0, sticky="ew")
+        form.columnconfigure(0, weight=1)
         self.dlg_denom = tk.StringVar()
         self.dlg_cf    = tk.StringVar()
         self.dlg_piva  = tk.StringVar()
         self.dlg_fine  = tk.StringVar()
         self.dlg_dest  = tk.StringVar()
+        self.dlg_pec   = tk.StringVar()
+        self.dlg_et1   = tk.StringVar()
+        self.dlg_et2   = tk.StringVar()
         self.dlg_cons  = tk.BooleanVar(value=False)
-        r = 0
-        self._row(form, r, "Denominazione:", self.dlg_denom, width=34)
-        r += 1; self._row(form, r, "Codice fiscale:", self.dlg_cf)
-        r += 1; self._row(form, r, "Partita IVA:", self.dlg_piva)
-        r += 1; self._row(form, r, "Data fine delega:", self.dlg_fine)
-        r += 1; self._row(form, r, "Codice destinatario:", self.dlg_dest)
-        r += 1
-        ttk.Label(form, text="Conservazione:").grid(row=r, column=0, sticky="w", pady=4, padx=(0, 8))
-        ttk.Checkbutton(form, variable=self.dlg_cons).grid(row=r, column=1, sticky="w")
+
+        # Intestazione con il pulsante comprimi/espandi (form espanso di default).
+        self.deleghe_form_espanso = tk.BooleanVar(value=True)
+        form_header = ttk.Frame(form)
+        form_header.grid(row=0, column=0, sticky="ew")
+        form_header.columnconfigure(0, weight=1)
+        self._deleghe_form_toggle = ttk.Button(form_header, width=14,
+                                               command=self._toggle_deleghe_form)
+        self._deleghe_form_toggle.grid(row=0, column=1, sticky="e")
+
+        # Contenuto collassabile: campi su due colonne (sinistra col 0/1 = dati anagrafici,
+        # destra col 2/3 = canale di ricezione ed etichette libere).
+        inner = ttk.Frame(form)
+        inner.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self._deleghe_form_inner = inner
+        self._row(inner, 0, "Denominazione:", self.dlg_denom, width=30)
+        self._row(inner, 1, "Codice fiscale:", self.dlg_cf)
+        self._row(inner, 2, "Partita IVA:", self.dlg_piva)
+        self._row(inner, 3, "Data fine delega:", self.dlg_fine)
+        ttk.Label(inner, text="Conservazione:").grid(row=4, column=0, sticky="w", pady=4, padx=(0, 8))
+        ttk.Checkbutton(inner, variable=self.dlg_cons).grid(row=4, column=1, sticky="w")
+
+        self._row(inner, 0, "Codice destinatario:", self.dlg_dest, width=30, col=2)
+        self._row(inner, 1, "PEC:", self.dlg_pec, width=30, col=2)
+        self.dlg_et1_label = ttk.Label(inner, text=self.deleghe_etichette["campo1"] + ":")
+        self.dlg_et1_label.grid(row=2, column=2, sticky="w", pady=4, padx=(24, 8))
+        ttk.Entry(inner, textvariable=self.dlg_et1, width=30).grid(row=2, column=3, sticky="w")
+        self.dlg_et2_label = ttk.Label(inner, text=self.deleghe_etichette["campo2"] + ":")
+        self.dlg_et2_label.grid(row=3, column=2, sticky="w", pady=4, padx=(24, 8))
+        ttk.Entry(inner, textvariable=self.dlg_et2, width=30).grid(row=3, column=3, sticky="w")
+        self._apply_deleghe_form_espanso()
 
         # ── Bottoni ──
-        bar = ttk.Frame(f)
-        bar.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        bar = ttk.Frame(bottom)
+        bar.grid(row=1, column=0, sticky="ew", pady=(10, 0))
         ttk.Button(bar, text="Aggiungi / Salva", command=self._deleghe_save).pack(side=tk.LEFT)
         ttk.Button(bar, text="Pulisci form", command=self._deleghe_clear_form).pack(side=tk.LEFT, padx=6)
-        ttk.Button(bar, text="Elimina", command=self._deleghe_delete).pack(side=tk.LEFT, padx=6)
-        ttk.Button(bar, text="↻ Aggiorna da AdE",
-                   command=self._deleghe_aggiorna_da_ade).pack(side=tk.LEFT, padx=(18, 6))
-        ttk.Button(bar, text="↻↻ Aggiorna tutte",
-                   command=self._deleghe_aggiorna_tutte).pack(side=tk.LEFT, padx=6)
+        # «Elimina» e «Aggiorna da AdE» sono nel menu tasto destro sulla riga.
+        ttk.Button(bar, text="↻↻ Aggiorna selezionate",
+                   command=self._deleghe_aggiorna_tutte).pack(side=tk.LEFT, padx=(18, 6))
+        self.deleghe_sel_count = tk.StringVar(value="")
+        ttk.Label(bar, textvariable=self.deleghe_sel_count,
+                  foreground="#777").pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(bar, text="▶ Usa per download", command=self._deleghe_use).pack(side=tk.LEFT, padx=6)
 
-        bar2 = ttk.Frame(f)
-        bar2.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        bar2 = ttk.Frame(bottom)
+        bar2.grid(row=2, column=0, sticky="ew", pady=(8, 0))
         ttk.Button(bar2, text="Importa da CSV AdE…", command=self._deleghe_import_ade).pack(side=tk.LEFT)
         ttk.Button(bar2, text="Importa CSV app…", command=self._deleghe_import_app).pack(side=tk.LEFT, padx=6)
         ttk.Button(bar2, text="Esporta CSV app…", command=self._deleghe_export_app).pack(side=tk.LEFT, padx=6)
 
         ttk.Checkbutton(
-            f, text="Non aggiornare l'anagrafica dai dati AdE durante il download",
+            bottom, text="Non aggiornare l'anagrafica dai dati AdE durante il download",
             variable=self.deleghe_no_update_var, command=self._persist_deleghe_flag,
-        ).grid(row=4, column=0, sticky="w", pady=(10, 0))
+        ).grid(row=3, column=0, sticky="w", pady=(10, 0))
 
-        self._note(f, 5, "«Aggiorna da AdE» fa login sul CF selezionato (o del form) e ricava da "
-                         "AdE denominazione, P.IVA, conservazione e codice destinatario, "
-                         "proponendo i campi variati; «Aggiorna tutte» lo fa su tutte le deleghe con "
-                         "un solo accesso. Lo stesso avviene in automatico al download, salvo la "
-                         "spunta qui sopra. «Importa da CSV AdE…» (l'esportazione «Elenco "
-                         "deleganti» del portale) riempie solo CF e data fine delega, senza "
-                         "toccare gli altri campi: la conservazione si legge solo dal portale coi "
-                         "tasti «Aggiorna…». «Importa/Esporta CSV app…» invece è un formato con "
-                         "tutti i campi, comodo per un backup completo o per trasferire l'elenco "
-                         "su un'altra installazione. «Usa per download» precompila la scheda "
-                         "Download Standard col CF/P.IVA selezionati.")
+        self._note(f, 5,
+                   "RICERCA E FILTRI.  La casella «Cerca» in alto filtra all'istante su tutti i "
+                   "campi (tranne fine delega e conservazione). Le due tendine accanto filtrano per "
+                   "il valore delle etichette. Cliccando l'intestazione di «Conserv.» o «Canale "
+                   "ricezione» si apre un filtro tipo Excel: spunti i valori (già presenti in "
+                   "tabella) da mostrare, «Applica» filtra e «Rimuovi filtro» azzera; un ▾ "
+                   "nell'intestazione segnala il filtro attivo. Le altre intestazioni ordinano al "
+                   "click. Tutti i filtri si combinano tra loro.")
+        self._note(f, 5,
+                   "SELEZIONE E AGGIORNAMENTO.  La prima colonna è una casella di spunta: seleziona "
+                   "le anagrafiche da aggiornare in blocco; il quadratino nell'intestazione "
+                   "spunta/deseleziona tutte le righe VISIBILI (comodo dopo una ricerca o un "
+                   "filtro), e il contatore «N selezionate» accanto ai pulsanti tiene il conto anche "
+                   "delle righe non più a schermo. «Aggiorna selezionate» aggiorna da AdE le "
+                   "anagrafiche spuntate (o tutte se nessuna è spuntata) con un solo accesso. Col "
+                   "TASTO DESTRO su una riga trovi invece «Aggiorna da AdE» (aggiorna solo quel "
+                   "cliente, proponendo i campi variati) ed «Elimina». L'aggiornamento automatico "
+                   "avviene anche al download, salvo la spunta qui sopra.")
+        self._note(f, 5,
+                   "SCHEDA E CAMPI.  Il riquadro dell'elenco è ridimensionabile: trascina il "
+                   "divisore per allargare la tabella o il form su schermi piccoli, e usa la barra "
+                   "di scorrimento orizzontale per le colonne più a destra. La colonna «Canale "
+                   "ricezione» mostra il codice destinatario SDI oppure, se il cliente riceve via "
+                   "PEC, l'indirizzo PEC. «Aggiungi / Salva» scrive la riga del form (inclusi PEC e "
+                   "le due etichette libere). I NOMI delle due etichette si cambiano da ⚙ "
+                   "Impostazioni (è solo un'etichetta di visualizzazione).")
+        self._note(f, 5,
+                   "IMPORT/EXPORT E SCORCIATOIE.  «Importa da CSV AdE…» (l'esportazione «Elenco "
+                   "deleganti» del portale) riempie solo CF e data fine delega, senza toccare gli "
+                   "altri campi: la conservazione si legge solo dal portale coi tasti «Aggiorna…». "
+                   "«Importa/Esporta CSV app…» è invece un formato con tutti i campi, comodo per un "
+                   "backup completo o per trasferire l'elenco su un'altra installazione. «Usa per "
+                   "download» precompila la scheda Download Standard col CF/P.IVA selezionati; col "
+                   "TASTO DESTRO su una riga si sceglie in quale tab portare il cliente (Download "
+                   "Standard, Richieste Massive, Bolli Virtuali, Utility).")
+        self._deleghe_applica_nomi_etichette()
+        self._deleghe_refresh_filtri()
         self._deleghe_refresh()
         self._add_help_button(tab, corner="se")
+
+    def _deleghe_applica_nomi_etichette(self):
+        """Rilegge i nomi etichetta dalle preferenze (Impostazioni) e li riporta su
+        intestazioni colonne, label dei filtri e label del form. Chiamato all'avvio e
+        ogni volta che si salvano le Impostazioni."""
+        n1 = self.etichetta1_var.get().strip() or ETICHETTE_DELEGHE_DEFAULT["campo1"]
+        n2 = self.etichetta2_var.get().strip() or ETICHETTE_DELEGHE_DEFAULT["campo2"]
+        self.deleghe_etichette = {"campo1": n1, "campo2": n2}
+        self.deleghe_tree.heading("etichetta1", text=n1)
+        self.deleghe_tree.heading("etichetta2", text=n2)
+        self.deleghe_lbl_filtro1.config(text=n1 + ":")
+        self.deleghe_lbl_filtro2.config(text=n2 + ":")
+        self.dlg_et1_label.config(text=n1 + ":")
+        self.dlg_et2_label.config(text=n2 + ":")
+
+    def _apply_deleghe_form_espanso(self):
+        """Mostra/nasconde i campi della sezione «Riga» secondo `deleghe_form_espanso`."""
+        if bool(self.deleghe_form_espanso.get()):
+            self._deleghe_form_inner.grid()
+            self._deleghe_form_toggle.configure(text="▲  Comprimi")
+        else:
+            self._deleghe_form_inner.grid_remove()
+            self._deleghe_form_toggle.configure(text="▼  Espandi")
+
+    def _toggle_deleghe_form(self):
+        """Comprimi/espandi la sezione «Riga» (form di inserimento/modifica anagrafica)."""
+        self.deleghe_form_espanso.set(not bool(self.deleghe_form_espanso.get()))
+        self._apply_deleghe_form_espanso()
+
+    def _deleghe_refresh_filtri(self):
+        """Ricalcola i valori distinti delle due etichette nelle tendine di filtro,
+        mantenendo la selezione corrente se ancora valida."""
+        for key, var, cb in (("etichetta1", self.deleghe_filtro1, self.deleghe_cb1),
+                             ("etichetta2", self.deleghe_filtro2, self.deleghe_cb2)):
+            distinti = sorted({str(r.get(key, "") or "").strip()
+                              for r in self.deleghe_rows if str(r.get(key, "") or "").strip()},
+                             key=str.lower)
+            cb["values"] = [self._FILTRO_TUTTE] + distinti
+            if var.get() not in cb["values"]:
+                var.set(self._FILTRO_TUTTE)
+
+    def _deleghe_valore_display(self, row: dict, col: str) -> str:
+        """Valore mostrato in tabella per la colonna `col` (usato da filtri Excel-like):
+        «Sì»/«No» per conservazione, canale SDI/PEC per codice_destinatario, testo altrove."""
+        if col == "conservazione":
+            return "Sì" if row.get("conservazione") else "No"
+        if col == "codice_destinatario":
+            return self._deleghe_canale(row)
+        return str(row.get(col, "") or "")
+
+    def _deleghe_match(self, row: dict) -> bool:
+        """True se la riga passa ricerca, i due filtri per etichetta e i filtri di colonna
+        tipo Excel (tutti in AND)."""
+        q = self.deleghe_search.get().strip().lower()
+        if q:
+            campi = (row.get("denominazione", ""), row.get("codice_fiscale", ""),
+                    row.get("partita_iva", ""), row.get("codice_destinatario", ""),
+                    row.get("pec", ""), row.get("etichetta1", ""), row.get("etichetta2", ""))
+            if not any(q in str(c).lower() for c in campi):
+                return False
+        f1 = self.deleghe_filtro1.get()
+        if f1 and f1 != self._FILTRO_TUTTE and str(row.get("etichetta1", "") or "").strip() != f1:
+            return False
+        f2 = self.deleghe_filtro2.get()
+        if f2 and f2 != self._FILTRO_TUTTE and str(row.get("etichetta2", "") or "").strip() != f2:
+            return False
+        for col, ammessi in self.deleghe_col_filtri.items():
+            if self._deleghe_valore_display(row, col) not in ammessi:
+                return False
+        return True
+
+    # ── Checkbox di selezione (colonna «_sel») ─────────────────────────────────
+
+    def _deleghe_visibili(self) -> list[dict]:
+        """Righe attualmente visibili (che passano ricerca + filtri), nell'ordine corrente."""
+        return [r for r in self.deleghe_rows if self._deleghe_match(r)]
+
+    def _deleghe_selezionate(self) -> list[dict]:
+        """Righe con la checkbox spuntata (per CF), a prescindere dai filtri correnti."""
+        return [r for r in self.deleghe_rows
+                if str(r.get("codice_fiscale", "") or "").upper() in self.deleghe_checked]
+
+    def _deleghe_on_click(self, event):
+        """Click sulla colonna «_sel»: alterna la spunta della riga sotto il cursore.
+        Sulle altre colonne non fa nulla (lascia la normale selezione del Treeview)."""
+        if self.deleghe_tree.identify_region(event.x, event.y) != "cell":
+            return
+        if self.deleghe_tree.identify_column(event.x) != "#1":  # #1 = colonna «_sel»
+            return
+        iid = self.deleghe_tree.identify_row(event.y)
+        if not iid:
+            return
+        cf = str(self.deleghe_rows[int(iid)].get("codice_fiscale", "") or "").upper()
+        if not cf:
+            return
+        if cf in self.deleghe_checked:
+            self.deleghe_checked.discard(cf)
+        else:
+            self.deleghe_checked.add(cf)
+        self._deleghe_refresh()
+        return "break"  # non innescare anche l'ordinamento/selezione sul click
+
+    def _deleghe_toggle_all(self):
+        """Intestazione della colonna «_sel»: spunta o deseleziona TUTTE le righe visibili
+        (rispettando ricerca e filtri). Se sono già tutte spuntate, le deseleziona."""
+        visibili = self._deleghe_visibili()
+        cf_vis = [str(r.get("codice_fiscale", "") or "").upper()
+                  for r in visibili if str(r.get("codice_fiscale", "") or "").strip()]
+        if cf_vis and all(cf in self.deleghe_checked for cf in cf_vis):
+            self.deleghe_checked.difference_update(cf_vis)   # tutte spuntate → deseleziona
+        else:
+            self.deleghe_checked.update(cf_vis)              # altrimenti spunta tutte
+        self._deleghe_refresh()
 
     def _no_update_check(self, frame, row: int) -> int:
         """Checkbox condivisa «non aggiornare l'anagrafica da AdE» (stessa variabile in
@@ -1687,9 +2181,10 @@ class FecGui:
 
     def _deleghe_aggiorna_tutte(self):
         """
-        Aggiorna l'anagrafica di TUTTE le deleghe con un solo accesso: login una volta,
-        poi cambia utenza di lavoro per ogni CF (ade_auth.seleziona_utenza) e applica in
-        automatico i campi variati (senza popup per singolo cliente).
+        Aggiorna l'anagrafica delle deleghe SPUNTATE (checkbox) con un solo accesso: login
+        una volta, poi cambia utenza di lavoro per ogni CF (ade_auth.seleziona_utenza) e
+        applica in automatico i campi variati (senza popup per singolo cliente). Se non c'è
+        alcuna spunta, propone di aggiornarle tutte.
         """
         cf, pin, pwd, cfst = self._get_creds()
         if not self.deleghe_rows:
@@ -1697,16 +2192,21 @@ class FecGui:
             return
         if not self._validate(CF=cf, PIN=pin, Password=pwd, **{"CF Studio": cfst}):
             return
-        n = len(self.deleghe_rows)
+        righe = self._deleghe_selezionate()  # snapshot (stessi oggetti riga)
+        if righe:
+            testo = (f"Aggiornare l'anagrafica delle {len(righe)} deleghe SELEZIONATE da AdE?")
+        else:
+            righe = list(self.deleghe_rows)
+            testo = (f"Nessuna anagrafica selezionata: aggiornare tutte le "
+                     f"{len(righe)} deleghe da AdE?")
         if not messagebox.askyesno(
-                "Aggiorna tutte",
-                f"Aggiornare l'anagrafica di tutte le {n} deleghe da AdE?\n\n"
+                "Aggiorna selezionate",
+                f"{testo}\n\n"
                 "I campi variati vengono applicati automaticamente (nessun popup per "
                 "singolo cliente). L'operazione richiede un solo accesso ma può durare "
                 "qualche minuto; puoi interromperla con «Interrompi»."):
             return
         profilo = _profilo_da_modalita(self.modalita.get())
-        righe = list(self.deleghe_rows)  # snapshot (stessi oggetti riga)
 
         import fec_download
         self.control = fec_download.Controllo()
@@ -1876,7 +2376,23 @@ class FecGui:
         self.deleghe_rows[idx] = self._deleghe._norm_row(row)
         self._deleghe.save_deleghe(self.deleghe_rows)
         self.deleghe_rows = self._deleghe.load_deleghe()
+        self._deleghe_refresh_filtri()
         self._deleghe_refresh()
+
+    def _deleghe_aggiorna_intestazioni(self, sort_col: str | None = None,
+                                       reverse: bool = False):
+        """Riscrive il testo di tutte le intestazioni: nome base (con nomi etichetta
+        utente) + freccia di ordinamento sulla colonna ordinata + indicatore di filtro
+        attivo sulle colonne con filtro Excel-like."""
+        nomi = {"etichetta1": self.deleghe_etichette["campo1"],
+                "etichetta2": self.deleghe_etichette["campo2"]}
+        for k, label, _w in self._DELEGHE_COLS:
+            base = nomi.get(k, label)  # etichette con nome utente, non il placeholder
+            if k in self._DELEGHE_COL_FILTRO:
+                suff = self._FILTRO_ON if self.deleghe_col_filtri.get(k) else ""
+            else:
+                suff = ((" ▼" if reverse else " ▲") if k == sort_col else "")
+            self.deleghe_tree.heading(k, text=base + suff)
 
     def _deleghe_sort(self, col: str):
         """
@@ -1892,28 +2408,130 @@ class FecGui:
         self._deleghe_sort_rev = reverse
 
         def chiave(row):
-            v = row.get(col, "")
             if col == "conservazione":
-                return (bool(v),)
+                return (bool(row.get(col)),)
             if col == "data_fine_delega":
-                d = self._deleghe._parse_data(str(v or ""))
+                d = self._deleghe._parse_data(str(row.get(col) or ""))
                 return (d is None, d or datetime.min)
+            # La colonna «Canale ricezione» ordina per il valore mostrato (SDI o PEC).
+            v = self._deleghe_canale(row) if col == "codice_destinatario" else row.get(col, "")
             s = str(v or "")
             return (s == "", s.lower())
 
         self.deleghe_rows.sort(key=chiave, reverse=reverse)
-        for k, label, _w in self._DELEGHE_COLS:
-            freccia = (" ▼" if reverse else " ▲") if k == col else ""
-            self.deleghe_tree.heading(k, text=label + freccia)
+        self._deleghe_aggiorna_intestazioni(sort_col=col, reverse=reverse)
         self._deleghe_refresh()
 
+    def _deleghe_apri_filtro_colonna(self, col: str):
+        """Filtro a tendina tipo Excel sull'intestazione di `col`: mostra i valori distinti
+        già presenti in tabella con una spunta ciascuno (più «Seleziona tutto»); alla
+        conferma tiene solo le righe con un valore spuntato. «Rimuovi filtro» azzera."""
+        etichetta = {c[0]: c[1] for c in self._DELEGHE_COLS}.get(col, col)
+        if col == "codice_destinatario":
+            etichetta = "Canale ricezione"
+        valori = sorted({self._deleghe_valore_display(r, col) for r in self.deleghe_rows},
+                        key=lambda s: (s == "", s.lower()))
+        attivi = self.deleghe_col_filtri.get(col)  # set o None (= tutti)
+
+        win = tk.Toplevel(self.root)
+        win.title(f"Filtro - {etichetta}")
+        win.transient(self.root)
+        win.grab_set()
+        frm = ttk.Frame(win, padding=(12, 10))
+        frm.pack(fill=tk.BOTH, expand=True)
+
+        vars_: dict = {}
+        tutto_var = tk.BooleanVar(value=(attivi is None))
+
+        def _sync_tutto():
+            n = sum(1 for v in vars_.values() if v.get())
+            tutto_var.set(n == len(vars_))
+
+        def _toggle_tutto():
+            for v in vars_.values():
+                v.set(tutto_var.get())
+
+        ttk.Checkbutton(frm, text="(Seleziona tutto)", variable=tutto_var,
+                        command=_toggle_tutto).grid(row=0, column=0, sticky="w")
+        ttk.Separator(frm, orient="horizontal").grid(row=1, column=0, sticky="ew", pady=(4, 4))
+
+        # Lista scorrevole dei valori distinti (canvas + frame interno).
+        canvas = tk.Canvas(frm, highlightthickness=0, width=260,
+                           height=min(max(len(valori), 1), 12) * 24)
+        vsb = ttk.Scrollbar(frm, orient="vertical", command=canvas.yview)
+        inner = ttk.Frame(canvas)
+        inner.bind("<Configure>",
+                   lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=vsb.set)
+        canvas.grid(row=2, column=0, sticky="nsew")
+        vsb.grid(row=2, column=1, sticky="ns")
+        for i, val in enumerate(valori):
+            var = tk.BooleanVar(value=(attivi is None or val in attivi))
+            vars_[val] = var
+            testo = val if val else "(vuoto)"
+            ttk.Checkbutton(inner, text=testo, variable=var,
+                            command=_sync_tutto).grid(row=i, column=0, sticky="w")
+
+        def applica():
+            scelti = {v for v, var in vars_.items() if var.get()}
+            if not scelti or len(scelti) == len(valori):
+                self.deleghe_col_filtri.pop(col, None)  # tutti/nessuno → nessun filtro
+            else:
+                self.deleghe_col_filtri[col] = scelti
+            self._deleghe_aggiorna_intestazioni(
+                sort_col=getattr(self, "_deleghe_sort_col", None),
+                reverse=getattr(self, "_deleghe_sort_rev", False))
+            self._deleghe_refresh()
+            win.destroy()
+
+        def rimuovi():
+            self.deleghe_col_filtri.pop(col, None)
+            self._deleghe_aggiorna_intestazioni(
+                sort_col=getattr(self, "_deleghe_sort_col", None),
+                reverse=getattr(self, "_deleghe_sort_rev", False))
+            self._deleghe_refresh()
+            win.destroy()
+
+        barra = ttk.Frame(frm)
+        barra.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        ttk.Button(barra, text="Applica", command=applica).pack(side=tk.RIGHT)
+        ttk.Button(barra, text="Annulla", command=win.destroy).pack(side=tk.RIGHT, padx=(0, 6))
+        ttk.Button(barra, text="Rimuovi filtro", command=rimuovi).pack(side=tk.LEFT)
+
+        win.bind("<Escape>", lambda _e: win.destroy())
+        win.update_idletasks()
+        x, y = self.root.winfo_pointerxy()
+        win.geometry(f"+{max(x - 20, 0)}+{max(y - 10, 0)}")
+
     def _deleghe_refresh(self):
-        """Svuota e ripopola il Treeview da self.deleghe_rows."""
+        """Svuota e ripopola il Treeview da self.deleghe_rows, applicando ricerca e filtri.
+
+        L'iid resta l'indice reale in self.deleghe_rows (le righe filtrate vengono saltate),
+        così selezione, modifica, elimina e «Usa in…» continuano a funzionare per indice."""
         self.deleghe_tree.delete(*self.deleghe_tree.get_children())
+        cf_vis = []
         for i, row in enumerate(self.deleghe_rows):
-            vals = [row.get(k, "") for k in (c[0] for c in self._DELEGHE_COLS)]
-            vals[4] = "Sì" if row.get("conservazione") else "No"  # colonna conservazione
+            if not self._deleghe_match(row):
+                continue
+            cf = str(row.get("codice_fiscale", "") or "").upper()
+            if cf:
+                cf_vis.append(cf)
+            vals = [self._SEL_ON if cf and cf in self.deleghe_checked else self._SEL_OFF]
+            for k in (c[0] for c in self._DELEGHE_COLS):
+                if k == "conservazione":
+                    vals.append("Sì" if row.get("conservazione") else "No")
+                elif k == "codice_destinatario":
+                    vals.append(self._deleghe_canale(row))
+                else:
+                    vals.append(row.get(k, ""))
             self.deleghe_tree.insert("", "end", iid=str(i), values=vals)
+        # Glifo dell'intestazione «_sel»: pieno se tutte le visibili sono spuntate.
+        tutte = bool(cf_vis) and all(cf in self.deleghe_checked for cf in cf_vis)
+        self.deleghe_tree.heading("_sel", text=self._SEL_ON if tutte else self._SEL_OFF)
+        # Contatore «N selezionate» accanto al pulsante (conta anche quelle non visibili).
+        n = len(self._deleghe_selezionate())
+        self.deleghe_sel_count.set(f"{n} selezionat{'a' if n == 1 else 'e'}" if n else "")
 
     def _deleghe_selected_index(self):
         sel = self.deleghe_tree.selection()
@@ -1929,10 +2547,14 @@ class FecGui:
         self.dlg_piva.set(row.get("partita_iva", ""))
         self.dlg_fine.set(row.get("data_fine_delega", ""))
         self.dlg_dest.set(row.get("codice_destinatario", ""))
+        self.dlg_pec.set(row.get("pec", ""))
+        self.dlg_et1.set(row.get("etichetta1", ""))
+        self.dlg_et2.set(row.get("etichetta2", ""))
         self.dlg_cons.set(bool(row.get("conservazione")))
 
     def _deleghe_clear_form(self):
-        for v in (self.dlg_denom, self.dlg_cf, self.dlg_piva, self.dlg_fine, self.dlg_dest):
+        for v in (self.dlg_denom, self.dlg_cf, self.dlg_piva, self.dlg_fine, self.dlg_dest,
+                  self.dlg_pec, self.dlg_et1, self.dlg_et2):
             v.set("")
         self.dlg_cons.set(False)
         if self.deleghe_tree.selection():
@@ -1950,6 +2572,9 @@ class FecGui:
             "data_fine_delega": self.dlg_fine.get(),
             "conservazione": self.dlg_cons.get(),
             "codice_destinatario": self.dlg_dest.get(),
+            "pec": self.dlg_pec.get(),
+            "etichetta1": self.dlg_et1.get(),
+            "etichetta2": self.dlg_et2.get(),
         }
         # Salvataggio manuale: sovrascrive sempre i campi col valore del form (anche vuoti)
         # se la riga esiste, così l'utente può correggere/cancellare un valore.
@@ -1962,6 +2587,7 @@ class FecGui:
             self.deleghe_rows.append(self._deleghe._norm_row(nuova))
         self._deleghe.save_deleghe(self.deleghe_rows)
         self.deleghe_rows = self._deleghe.load_deleghe()
+        self._deleghe_refresh_filtri()
         self._deleghe_refresh()
 
     def _deleghe_delete(self):
@@ -1975,20 +2601,61 @@ class FecGui:
             return
         del self.deleghe_rows[i]
         self._deleghe.save_deleghe(self.deleghe_rows)
+        self._deleghe_refresh_filtri()
         self._deleghe_refresh()
         self._deleghe_clear_form()
 
-    def _deleghe_use(self):
+    # Destinazioni di «Usa in...» (menu tasto destro sulla tabella deleghe e pulsante
+    # «Usa per download»): etichetta → (attributo tab, attributo var CF, attributo var P.IVA).
+    # Le tab non ancora costruite (attributo assente) vengono saltate nel menu.
+    _USA_IN_TABS = (
+        ("Download Standard",  "_std_tab",   "std_cf_cl",  "std_piva"),
+        ("Richieste Massive",  "_mass_tab",  "mass_cfcl",  "mass_piva"),
+        ("Bolli Virtuali",     "_bolli_tab", "bolli_cfcl", "bolli_piva"),
+        ("Utility",            "_util_tab",  "util_cfcl",  "util_piva"),
+    )
+
+    def _deleghe_usa_in(self, tab_attr: str, cf_attr: str, piva_attr: str):
+        """Precompila CF/P.IVA della tab indicata col cliente selezionato e la apre."""
         i = self._deleghe_selected_index()
         if i is None:
-            messagebox.showinfo("Deleghe", "Seleziona un cliente da usare per il download.")
+            messagebox.showinfo("Deleghe", "Seleziona un cliente da usare.")
             return
         row = self.deleghe_rows[i]
-        self.std_cf_cl.set(row.get("codice_fiscale", ""))
-        self.std_piva.set(row.get("partita_iva", ""))
-        if hasattr(self, "_std_tab"):
-            nb = self._std_tab.master  # il notebook a cui è stata aggiunta la scheda
-            nb.select(self._std_tab)
+        getattr(self, cf_attr).set(row.get("codice_fiscale", ""))
+        getattr(self, piva_attr).set(row.get("partita_iva", ""))
+        tab = getattr(self, tab_attr, None)
+        if tab is not None:
+            tab.master.select(tab)   # il notebook a cui è stata aggiunta la scheda
+
+    def _deleghe_use(self):
+        self._deleghe_usa_in("_std_tab", "std_cf_cl", "std_piva")
+
+    def _deleghe_context_menu(self, event):
+        """Tasto destro sulla tabella deleghe: seleziona la riga sotto il cursore e mostra
+        il menu «Usa in...» (porta CF/P.IVA del cliente nella tab scelta) più, dopo un
+        separatore, «Aggiorna da AdE» ed «Elimina» sulla riga selezionata."""
+        iid = self.deleghe_tree.identify_row(event.y)
+        if not iid:
+            return
+        self.deleghe_tree.selection_set(iid)
+        self.deleghe_tree.focus(iid)
+
+        menu = tk.Menu(self.deleghe_tree, tearoff=0)
+        for label, tab_attr, cf_attr, piva_attr in self._USA_IN_TABS:
+            if not hasattr(self, tab_attr):     # tab assente (es. build diverse)
+                continue
+            menu.add_command(
+                label=f"Usa in {label}",
+                command=lambda t=tab_attr, c=cf_attr, p=piva_attr:
+                    self._deleghe_usa_in(t, c, p))
+        menu.add_separator()
+        menu.add_command(label="↻ Aggiorna da AdE", command=self._deleghe_aggiorna_da_ade)
+        menu.add_command(label="Elimina", command=self._deleghe_delete)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
 
     def _deleghe_conferma_import(self, nuove: list[dict]) -> bool:
         """
@@ -2026,6 +2693,7 @@ class FecGui:
         self.deleghe_rows, agg, upd = self._deleghe.merge_many(self.deleghe_rows, nuove)
         self._deleghe.save_deleghe(self.deleghe_rows)
         self.deleghe_rows = self._deleghe.load_deleghe()
+        self._deleghe_refresh_filtri()
         self._deleghe_refresh()
         messagebox.showinfo("Import AdE", f"Deleghe Fatture & Corrispettivi importate.\n"
                                           f"Nuove: {agg}   Aggiornate: {upd}")
@@ -2046,6 +2714,7 @@ class FecGui:
         self.deleghe_rows, agg, upd = self._deleghe.merge_many(self.deleghe_rows, nuove)
         self._deleghe.save_deleghe(self.deleghe_rows)
         self.deleghe_rows = self._deleghe.load_deleghe()
+        self._deleghe_refresh_filtri()
         self._deleghe_refresh()
         messagebox.showinfo("Import CSV", f"Righe importate.\nNuove: {agg}   Aggiornate: {upd}")
 
@@ -2075,6 +2744,9 @@ class FecGui:
         self.std_dal     = tk.StringVar()
         self.std_al      = tk.StringVar()
         self.std_tipdata = tk.StringVar(value="1")
+        self.std_filtro_controparte = tk.BooleanVar(value=False)
+        self.std_filtro_piva = tk.StringVar()
+        self.std_filtro_cf   = tk.StringVar()
         # self.modalita / self.std_destdir creati in __init__ (popolati da config)
 
         r = 0
@@ -2103,6 +2775,20 @@ class FecGui:
         r += 1; self._row(f, r, "CF Cliente:", self.std_cf_cl)
         r += 1; self._row(f, r, "P.IVA (opzionale):", self.std_piva)
 
+        r += 1
+        ttk.Checkbutton(f, text="Scarica solo le fatture intestate a un determinato "
+                                "Cliente/Fornitore (controparte)",
+                        variable=self.std_filtro_controparte,
+                        command=self._std_filtro_controparte_changed).grid(
+            row=r, column=0, columnspan=2, sticky="w")
+
+        r += 1
+        self._filtro_controparte_frame = ttk.Frame(f)
+        self._filtro_controparte_frame.grid(row=r, column=0, columnspan=2, sticky="w")
+        self._row(self._filtro_controparte_frame, 0, "P.IVA controparte:", self.std_filtro_piva)
+        self._row(self._filtro_controparte_frame, 1, "CF controparte:", self.std_filtro_cf)
+        self._std_filtro_controparte_changed()
+
         r += 1; r = self._build_date_range(f, r, self.std_dal, self.std_al, "%d%m%Y") - 1
 
         r += 1
@@ -2129,6 +2815,11 @@ class FecGui:
                         variable=self.std_estrai_p7m).grid(
             row=r, column=0, columnspan=2, sticky="w")
 
+        r += 1
+        ttk.Checkbutton(f, text="Genera anche il CSV dell'elenco (formato Agenzia Entrate)",
+                        variable=self.std_csv_ade).grid(
+            row=r, column=0, columnspan=2, sticky="w")
+
         self._std_tipo_changed()
 
         r += 1; self._note(f, r, "Download in-process con un solo login (backend/headless dalla "
@@ -2137,11 +2828,20 @@ class FecGui:
                                  "documento pertinente) accodano, sullo stesso periodo, un secondo "
                                  "download di transfrontaliere o messe a disposizione nella "
                                  "rispettiva cartella (personalizzabile in ⚙ Impostazioni). "
+                                 "«Scarica solo le fatture intestate a...» filtra per P.IVA e/o CF "
+                                 "della controparte (Cliente per le emesse, Fornitore per le "
+                                 "ricevute/transfrontaliere); vale anche per l'eventuale download "
+                                 "«Incluso» in coda, ma non per Messe a Disposizione. "
                                  "«Non scaricare fatture rifiutate da P.A.» salta le fatture "
                                  "scartate senza salvarne il file; «Estrai file p7m» sostituisce la "
                                  "busta firmata con l'XML estratto (mai entrambi i formati "
                                  "insieme). I periodi superiori a 3 mesi vengono spezzati e "
-                                 "scaricati automaticamente a blocchi.")
+                                 "scaricati automaticamente a blocchi. "
+                                 "«Genera anche il CSV dell'elenco» salva nella cartella di "
+                                 "destinazione lo stesso file che il portale produce col "
+                                 "pulsante «Esporta la tabella», utile per la riconciliazione "
+                                 "con i gestionali: un solo file per l'intero periodo, con le "
+                                 "sole fatture effettivamente scaricate. ")
 
         r += 1; r = self._no_update_check(f, r)
         self._run_btn(f, r, "Avvia Download", self._run_standard)
@@ -2153,6 +2853,12 @@ class FecGui:
             initialdir=self.std_destdir.get().strip() or DEFAULT_DEST_DIR)
         if scelta:
             self.std_destdir.set(scelta)
+
+    def _std_filtro_controparte_changed(self):
+        if self.std_filtro_controparte.get():
+            self._filtro_controparte_frame.grid()
+        else:
+            self._filtro_controparte_frame.grid_remove()
 
     def _std_tipo_changed(self, _=None):
         tipo = self.std_tipo.get()
@@ -2196,6 +2902,17 @@ class FecGui:
         tipo = self.std_tipo.get()
         tipdata = int(self.std_tipdata.get())
 
+        filtro_piva = filtro_cf = ""
+        if self.std_filtro_controparte.get():
+            filtro_piva = self.std_filtro_piva.get().strip()
+            filtro_cf = self.std_filtro_cf.get().strip()
+            if not filtro_piva and not filtro_cf:
+                messagebox.showerror(
+                    "Filtro Cliente/Fornitore",
+                    "Il filtro per Cliente/Fornitore è attivo: indica almeno la "
+                    "P.IVA o il CF della controparte.")
+                return
+
         # P.IVA NON obbligatoria: la consultazione usa solo il CF; se il CF ha più P.IVA
         # e il campo è vuoto, in fase di login compare il popup di scelta. Se indicata,
         # si usa quella.
@@ -2215,29 +2932,35 @@ class FecGui:
         # spezza i periodi > 3 mesi e unisce i risultati.
         escludi_scartate = bool(self.std_escludi_scartate.get())
         estrai_p7m = bool(self.std_estrai_p7m.get())
+        csv_ade = bool(self.std_csv_ade.get())
         includi_trans = bool(self.std_includi_trans.get())
         includi_disposizione = bool(self.std_includi_disposizione.get())
 
         def _op_emesse(res, log, fq, ctrl):
-            fq.esegui_richiesta(res, "emesse", dal=dal, al=al, cf_cliente=cfcl,
+            esiti = [fq.esegui_richiesta(res, "emesse", dal=dal, al=al, cf_cliente=cfcl,
                                 dest_dir=d_em, sottocartella=s_em, control=ctrl, log=log,
-                                escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m)
+                                escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m, csv_ade=csv_ade,
+                                filtro_piva=filtro_piva, filtro_cf=filtro_cf)]
             if includi_trans:
                 log("\n↪  Aggiungo in coda: Transfrontaliere Emesse (stesso periodo)...")
-                fq.esegui_richiesta(res, "trans_emesse", dal=dal, al=al, cf_cliente=cfcl,
+                esiti.append(fq.esegui_richiesta(res, "trans_emesse", dal=dal, al=al, cf_cliente=cfcl,
                                     dest_dir=d_te, sottocartella=s_te, control=ctrl, log=log,
-                                    escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m)
+                                    escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m, csv_ade=csv_ade,
+                                    filtro_piva=filtro_piva, filtro_cf=filtro_cf))
+            return esiti
 
         def _op_ricevute(res, log, fq, ctrl):
-            fq.esegui_richiesta(res, "ricevute", dal=dal, al=al, cf_cliente=cfcl,
+            esiti = [fq.esegui_richiesta(res, "ricevute", dal=dal, al=al, cf_cliente=cfcl,
                                 tipo_data=tipdata, dest_dir=d_ri, sottocartella=s_ri,
                                 control=ctrl, log=log,
-                                escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m)
+                                escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m, csv_ade=csv_ade,
+                                filtro_piva=filtro_piva, filtro_cf=filtro_cf)]
             if includi_disposizione:
                 log("\n↪  Aggiungo in coda: Messe a Disposizione (stesso periodo)...")
-                fq.esegui_richiesta(res, "messe_disposizione", dal=dal, al=al, cf_cliente=cfcl,
+                esiti.append(fq.esegui_richiesta(res, "messe_disposizione", dal=dal, al=al, cf_cliente=cfcl,
                                     dest_dir=d_md, sottocartella=s_md, control=ctrl, log=log,
-                                    escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m)
+                                    escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m, csv_ade=csv_ade))
+            return esiti
 
         OPS = {
             "Fatture Emesse": _op_emesse,
@@ -2245,15 +2968,17 @@ class FecGui:
             "Transfrontaliere Emesse": lambda res, log, fq, ctrl:
                 fq.esegui_richiesta(res, "trans_emesse", dal=dal, al=al, cf_cliente=cfcl,
                                     dest_dir=d_te, sottocartella=s_te, control=ctrl, log=log,
-                                    escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m),
+                                    escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m, csv_ade=csv_ade,
+                                    filtro_piva=filtro_piva, filtro_cf=filtro_cf),
             "Transfrontaliere Ricevute": lambda res, log, fq, ctrl:
                 fq.esegui_richiesta(res, "trans_ricevute", dal=dal, al=al, cf_cliente=cfcl,
                                     dest_dir=d_tr, sottocartella=s_tr, control=ctrl, log=log,
-                                    escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m),
+                                    escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m, csv_ade=csv_ade,
+                                    filtro_piva=filtro_piva, filtro_cf=filtro_cf),
             "Messe a Disposizione": lambda res, log, fq, ctrl:
                 fq.esegui_richiesta(res, "messe_disposizione", dal=dal, al=al, cf_cliente=cfcl,
                                     dest_dir=d_md, sottocartella=s_md, control=ctrl, log=log,
-                                    escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m),
+                                    escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m, csv_ade=csv_ade),
         }
         self._esegui_in_process(cfcl, piva, _profilo_da_modalita(self.modalita.get()), tipo, OPS[tipo])
 
@@ -2271,6 +2996,7 @@ class FecGui:
         """
         tab = ttk.Frame(nb)
         nb.add(tab, text="  Richieste Massive  ")
+        self._mass_tab = tab  # riferimento per «Usa in...» dalla scheda Deleghe
         f = self._lf(tab)
 
         self.mass_tipo    = tk.StringVar(value="Ft. Emesse")
@@ -2524,7 +3250,7 @@ class FecGui:
             return
 
         profilo = _profilo_da_modalita(self.modalita.get())
-        backend = self.backend_var.get()
+        backend = self._backend_attivo()
         headless = bool(self.headless_var.get())
 
         def task(log):
@@ -2629,7 +3355,7 @@ class FecGui:
         (soft-delete) della richiesta."""
         cf, pin, pwd, cfst = self._get_creds()
         profilo = _profilo_da_modalita(self.modalita.get())
-        backend = self.backend_var.get()
+        backend = self._backend_attivo()
         headless = bool(self.headless_var.get())
         estrai_zip = bool(self.estrai_zip_risultati_massivi.get())
 
@@ -2761,6 +3487,7 @@ class FecGui:
     def _tab_bolli(self, nb: ttk.Notebook):
         tab = ttk.Frame(nb)
         nb.add(tab, text="  Bolli Virtuali  ")
+        self._bolli_tab = tab  # riferimento per «Usa in...» dalla scheda Deleghe
         f = self._lf(tab)
 
         self.bolli_cfcl = tk.StringVar()
@@ -2825,6 +3552,7 @@ class FecGui:
     def _tab_utility(self, nb: ttk.Notebook):
         tab = ttk.Frame(nb)
         nb.add(tab, text="  Utility  ")
+        self._util_tab = tab  # riferimento per «Usa in...» dalla scheda Deleghe
         f = self._lf(tab)
 
         self.util_cfcl = tk.StringVar()
@@ -2834,10 +3562,21 @@ class FecGui:
         self.util_al = tk.StringVar()
         self.util_period = tk.StringVar()             # periodo scelto nella tendina
         self.util_granularita = tk.StringVar(value="unico")
+        self.util_formato = tk.StringVar(value="excel")
 
         r = 0
         self._combo(f, r, "Tipo elenco:", self.util_tipo,
                     list(self._UTILITY_TIPI))
+
+        r += 1
+        ttk.Label(f, text="Formato:").grid(row=r, column=0, sticky="w", pady=4, padx=(0, 8))
+        fframe = ttk.Frame(f)
+        fframe.grid(row=r, column=1, sticky="w")
+        ttk.Radiobutton(fframe, text="Excel (con dettaglio IVA)",
+                        variable=self.util_formato, value="excel").pack(side=tk.LEFT)
+        ttk.Radiobutton(fframe, text="CSV Agenzia Entrate",
+                        variable=self.util_formato, value="csv").pack(side=tk.LEFT, padx=14)
+
         r += 1; self._row(f, r, "CF Cliente:", self.util_cfcl)
         r += 1
         self._util_piva_lbl = ttk.Label(f, text="P.IVA (opzionale):")
@@ -2887,9 +3626,23 @@ class FecGui:
                                  "minuto). Corrispettivi: un file per matricola dispositivo; se la "
                                  "P.IVA non è indicata usa quella dell'utenza di lavoro attiva. "
                                  "Con «Anno intero» si può scegliere se avere un file unico oppure "
-                                 "uno per trimestre o per mese.")
+                                 "uno per trimestre o per mese. "
+                                 "Il formato «CSV Agenzia Entrate» produce lo stesso file del "
+                                 "pulsante «Esporta la tabella» del portale, per la riconciliazione "
+                                 "con i gestionali: non richiede «openpyxl», non legge il dettaglio "
+                                 "delle fatture ed è quindi immediato, ma non ha le colonne per "
+                                 "aliquota. Non è disponibile per i Corrispettivi.")
         r += 1; r = self._no_update_check(f, r)
-        self._run_btn(f, r, "Scarica Elenco Excel", self._run_utility, width=26)
+        self._util_run_btn = self._run_btn(f, r, "Scarica Elenco Excel",
+                                           self._run_utility, width=26)
+
+        def _toggle_formato(*_):
+            csv = self.util_formato.get() == "csv"
+            self._util_run_btn.configure(
+                text="▶  Scarica Elenco CSV" if csv else "▶  Scarica Elenco Excel")
+
+        self.util_formato.trace_add("write", _toggle_formato)
+        _toggle_formato()
 
         # Strumenti di debug (dump/HAR/log in «_materiale/», fuori da Git): solo DEV_MODE,
         # non servono all'uso normale dell'app e non vanno nella GUI pubblica.
@@ -2927,6 +3680,7 @@ class FecGui:
         tipo_ui = self.util_tipo.get()
         destdir, sotto = self._dest_classe("utility")
         corrispettivi = tipo_ui == "Corrispettivi"
+        formato_csv = self.util_formato.get() == "csv"
 
         campi = dict(CF=cf, PIN=pin, Password=pwd, **{"CF Studio": cfst},
                     **{"CF Cliente": cfcl},
@@ -2936,13 +3690,20 @@ class FecGui:
         # l'anagrafica deleghe con «aggiorna dati da AdE»).
         if not self._validate(**campi):
             return
-        mancanti = fec_deps.find_missing().get("excel", [])
-        if mancanti:
+        if formato_csv and corrispettivi:
             messagebox.showerror(
-                "Dipendenza mancante",
-                "L'export Excel richiede il pacchetto «openpyxl», non installato.\n\n"
-                f"Installa con:  {fec_deps.pip_install_hint(mancanti)}")
+                "Formato non disponibile",
+                "Il CSV formato Agenzia Entrate riguarda solo gli elenchi fatture.\n\n"
+                "Per i Corrispettivi scegli il formato Excel.")
             return
+        if not formato_csv:
+            mancanti = fec_deps.find_missing().get("excel", [])
+            if mancanti:
+                messagebox.showerror(
+                    "Dipendenza mancante",
+                    "L'export Excel richiede il pacchetto «openpyxl», non installato.\n\n"
+                    f"Installa con:  {fec_deps.pip_install_hint(mancanti)}")
+                return
 
         gran = self._util_gran()
 
@@ -2953,22 +3714,26 @@ class FecGui:
                 piva_eff = (getattr(res, "piva", "") or "").strip()
                 if piva_eff:
                     log(f"P.IVA non indicata: uso quella dell'utenza attiva ({piva_eff}).")
+            percorsi = []
             for sd, sa in self._util_sotto_periodi(dal, al, gran, log):
                 try:
                     if corrispettivi:
-                        fec_utility.elenco_corrispettivi_excel(
+                        percorsi.extend(fec_utility.elenco_corrispettivi_excel(
                             res, cfcl, piva_eff, sd, sa,
-                            dest_dir=destdir, sottocartella=sotto, control=ctrl, log=log)
+                            dest_dir=destdir, sottocartella=sotto, control=ctrl, log=log))
                     else:
                         tipo = self._UTILITY_TIPI.get(tipo_ui, "emesse")
-                        fec_utility.elenco_fatture_excel(
+                        genera = (fec_utility.elenco_fatture_csv_ade if formato_csv
+                                  else fec_utility.elenco_fatture_excel)
+                        percorsi.append(genera(
                             res, cfcl, piva, tipo, sd, sa,
-                            dest_dir=destdir, sottocartella=sotto, control=ctrl, log=log)
+                            dest_dir=destdir, sottocartella=sotto, control=ctrl, log=log))
                 except fec_utility.NessunDato as exc:
                     log(f"   (periodo saltato: {exc})")
+            return percorsi
 
         self._esegui_in_process(cfcl, piva, _profilo_da_modalita(self.modalita.get()),
-            f"Elenco Excel {tipo_ui}", op)
+            f"Elenco {'CSV' if formato_csv else 'Excel'} {tipo_ui}", op)
 
     def _util_gran(self) -> str:
         """Granularità file Excel: vale solo se il periodo scelto è «Anno intero»

@@ -1,0 +1,104 @@
+[
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0001",
+  "dataFattura": "2026-06-10",
+  "dataAccoglienzaFile": "2026-06-10",
+  "denominazioneEmittente": "FORNITORE0001",
+  "denominazioneCliente": "CLIENTE0001",
+  "imponibile": "+000000000058,17",
+  "imposta": "+000000000005,82",
+  "fileDownload": {
+   "idInvio": "SDI0001",
+   "statoFile": "Mancata consegna"
+  },
+  "pivaEmittente": "PI0001",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0002",
+  "dataFattura": "2026-05-25",
+  "dataAccoglienzaFile": "2026-05-25",
+  "denominazioneEmittente": "FORNITORE0001",
+  "denominazioneCliente": "CLIENTE0001",
+  "imponibile": "+000000000013,64",
+  "imposta": "+000000000001,36",
+  "fileDownload": {
+   "idInvio": "SDI0002",
+   "statoFile": "Mancata consegna"
+  },
+  "pivaEmittente": "PI0001",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0003",
+  "dataFattura": "2026-04-23",
+  "dataAccoglienzaFile": "2026-04-23",
+  "denominazioneEmittente": "FORNITORE0001",
+  "denominazioneCliente": "CLIENTE0001",
+  "imponibile": "+000000000027,26",
+  "imposta": "+000000000002,73",
+  "fileDownload": {
+   "idInvio": "SDI0003",
+   "statoFile": "Mancata consegna"
+  },
+  "pivaEmittente": "PI0001",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0004",
+  "dataFattura": "2026-04-23",
+  "dataAccoglienzaFile": "2026-04-23",
+  "denominazioneEmittente": "FORNITORE0001",
+  "denominazioneCliente": "CLIENTE0001",
+  "imponibile": "+000000000036,35",
+  "imposta": "+000000000003,64",
+  "fileDownload": {
+   "idInvio": "SDI0004",
+   "statoFile": "Mancata consegna"
+  },
+  "pivaEmittente": "PI0001",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0005",
+  "dataFattura": "2026-04-23",
+  "dataAccoglienzaFile": "2026-04-23",
+  "denominazioneEmittente": "FORNITORE0001",
+  "denominazioneCliente": "CLIENTE0001",
+  "imponibile": "+000000000050,90",
+  "imposta": "+000000000005,09",
+  "fileDownload": {
+   "idInvio": "SDI0005",
+   "statoFile": "Mancata consegna"
+  },
+  "pivaEmittente": "PI0001",
+  "pivaCliente": "PIC0001"
+ },
+ {
+  "decodificaTipoInvio": "Fattura tra privati",
+  "tipoDocumento": "Fattura",
+  "numeroFattura": "DOC0006",
+  "dataFattura": "2026-04-23",
+  "dataAccoglienzaFile": "2026-04-23",
+  "denominazioneEmittente": "FORNITORE0001",
+  "denominazioneCliente": "CLIENTE0001",
+  "imponibile": "+000000000032,72",
+  "imposta": "+000000000003,27",
+  "fileDownload": {
+   "idInvio": "SDI0006",
+   "statoFile": "Mancata consegna"
+  },
+  "pivaEmittente": "PI0001",
+  "pivaCliente": "PIC0001"
+ }
+]

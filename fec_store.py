@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# FeC-Plus - v0.03 alpha
+# FeC-Plus - v0.04 dev
 """
 fec_store.py - Persistenza separata di CREDENZIALI (cifrate) e PREFERENZE (in chiaro).
 
@@ -18,7 +18,7 @@ codice sorgente. La password Entratel non viene comunque mai salvata.
 
 from __future__ import annotations
 
-__version__ = "0.03 alpha"
+__version__ = "0.04 dev"
 
 import base64
 import json
@@ -43,8 +43,10 @@ CRED_KEYS = ("cf", "pin", "cfstudio")
 SETTINGS_KEYS = ("login_backend", "browser_headless", "modalita",
                  "std_destdir", "salva_credenziali", "cartelle_documenti", "console_sash",
                  "deleghe_no_update", "std_escludi_scartate_pa", "std_estrai_p7m",
+                 "std_csv_ade", "login_sso",
                  "std_includi_trans", "std_includi_disposizione",
-                 "cred_espanse", "estrai_zip_risultati_massivi")
+                 "cred_espanse", "cartelle_espanse", "estrai_zip_risultati_massivi",
+                 "popup_fine_task", "etichette_deleghe")
 
 # Segreto "leggero" incluso nel codice → cifratura portabile (nessun OS/keyring), ma
 # obfuscation-grade. Cambiarlo invalida i file credenziali già salvati.

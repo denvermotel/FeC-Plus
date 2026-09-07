@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# FeC-Plus - v0.03 alpha
+# FeC-Plus - v0.04 dev
 """
 fec_deleghe.py - Anagrafica locale delle «deleghe ricevute».
 
@@ -24,14 +24,11 @@ Tre vie di caricamento tabella:
 In tutti i casi il merge (`upsert`/`merge_many`) aggiorna automaticamente SOLO
 `data_fine_delega`: gli altri campi restano quelli già in tabella.
 
-ℹ️ Il popolamento automatico dal portale Deleghe è stato tentato e poi accantonato
-(bloccato da un WAF lato AdE): codice parcheggiato in `fec_deleghe_beta.py`, non
-collegato alla GUI.
 """
 
 from __future__ import annotations
 
-__version__ = "0.03 alpha"
+__version__ = "0.04 dev"
 
 import csv
 import json
@@ -47,8 +44,13 @@ else:
 DELEGHE_FILE = os.path.join(SCRIPT_DIR, "fec_deleghe.json")
 
 # Schema riga della tabella deleghe. `conservazione` è un bool; gli altri sono stringhe.
+# `codice_destinatario` e `pec` sono i due canali (mutuamente esclusivi) di ricezione delle
+# fatture elettroniche: si mostra quello valorizzato. `etichetta1`/`etichetta2` sono due campi
+# liberi a disposizione dell'utente per taggare l'anagrafica; i loro NOMI visualizzati sono
+# una preferenza di GUI salvata in fec_settings.json (non qui).
 FIELDS = ("denominazione", "codice_fiscale", "partita_iva",
-          "data_fine_delega", "conservazione", "codice_destinatario")
+          "data_fine_delega", "conservazione", "codice_destinatario",
+          "pec", "etichetta1", "etichetta2")
 
 # ── Match servizi nel CSV AdE (sottostringhe, facili da aggiornare) ───────────
 # Delega che abilita lo scarico delle fatture da Fatture & Corrispettivi.
@@ -79,7 +81,10 @@ def _truthy(v) -> bool:
 
 
 def _norm_row(row: dict) -> dict:
-    """Ritorna una riga con tutti i campi di FIELDS, stringhe trim e CF in maiuscolo."""
+    """Ritorna una riga con tutti i campi di FIELDS, stringhe trim e CF in maiuscolo.
+
+    `pec` ed `etichetta1`/`etichetta2` restano come digitati (solo trim): la PEC è un
+    indirizzo e le etichette sono testo libero dell'utente."""
     out = {}
     for k in FIELDS:
         if k == "conservazione":
@@ -95,19 +100,24 @@ def _norm_row(row: dict) -> dict:
 # ── Persistenza JSON ──────────────────────────────────────────────────────────
 
 def load_deleghe() -> list[dict]:
-    """Ritorna la lista di righe deleghe, [] se assente/illeggibile."""
+    """Ritorna la lista di righe deleghe, [] se assente/illeggibile.
+
+    Tollera anche il formato oggetto `{"deleghe": [...]}` (usato in una versione
+    intermedia) leggendone la chiave `deleghe`."""
     try:
         with open(DELEGHE_FILE, "r", encoding="utf-8") as fh:
             data = json.load(fh)
-        if not isinstance(data, list):
-            return []
-        return [_norm_row(r) for r in data if isinstance(r, dict)]
     except (OSError, ValueError):
         return []
+    if isinstance(data, dict):
+        data = data.get("deleghe", [])
+    if not isinstance(data, list):
+        return []
+    return [_norm_row(r) for r in data if isinstance(r, dict)]
 
 
 def save_deleghe(rows: list[dict]) -> None:
-    """Salva la lista di righe (normalizzate) come JSON."""
+    """Salva la lista di righe (normalizzate) come JSON (lista piatta)."""
     clean = [_norm_row(r) for r in rows]
     with open(DELEGHE_FILE, "w", encoding="utf-8") as fh:
         json.dump(clean, fh, indent=2, ensure_ascii=False)

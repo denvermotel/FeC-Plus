@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# FeC-Plus - v0.03 alpha
+# FeC-Plus - v0.04 dev
 """
 fec_anagrafica.py - Recupero dei dati anagrafici del cliente dal portale AdE, a partire
 da una sessione GIÀ autenticata (`AuthResult` di ade_auth), e confronto con l'anagrafica
@@ -23,7 +23,7 @@ Modulo di solo data layer.
 
 from __future__ import annotations
 
-__version__ = "0.03 alpha"
+__version__ = "0.04 dev"
 
 from datetime import date
 
@@ -40,7 +40,7 @@ ADESIONE_URL = f"{IVASERVIZI}/ser/api/fatture/v1/ul/me/adesione/stato"
 FULLTEMPLATE_URL = f"{INSTR_REST}/fullTemplate"
 
 # Campi dell'anagrafica delega ricavabili da AdE (allineati a fec_deleghe.FIELDS).
-CAMPI_ADE = ("denominazione", "partita_iva", "conservazione", "codice_destinatario")
+CAMPI_ADE = ("denominazione", "partita_iva", "conservazione", "codice_destinatario", "pec")
 
 # Etichette leggibili per il popup di aggiornamento.
 ETICHETTE = {
@@ -48,6 +48,7 @@ ETICHETTE = {
     "partita_iva": "Partita IVA",
     "conservazione": "Conservazione",
     "codice_destinatario": "Codice destinatario (SDI)",
+    "pec": "PEC",
 }
 
 _HTTP_TIMEOUT = (15, 30)
@@ -96,24 +97,32 @@ def _fetch_full_template(auth) -> dict:
         return {}
 
 
-def _fetch_codice_destinatario(auth) -> str:
+def _fetch_canale(auth) -> tuple[str, str]:
     """
-    GET censimenti/registrazione → codice destinatario SDI se registrato come «CODICE»
-    (es. `W7YVJK9`). Ritorna "" per PEC, non registrato, non autorizzato o errore.
+    GET censimenti/registrazione → canale di ricezione delle fatture, come coppia
+    `(codice_destinatario, pec)`: sono mutuamente esclusivi, uno solo è valorizzato.
+
+    Ramo «CODICE» → codice destinatario SDI (es. `W7YVJK9`), pec "".
+    Ramo «PEC»    → indirizzo PEC in `indirizzoStandard`, codice "".
+    Ritorna ("", "") per non registrato, non autorizzato (403) o errore.
     """
     try:
         r = auth.session.get(f"{CENSIMENTI_URL}?v={date.today().isoformat()}",
                              headers=_headers_ser(auth), verify=False, timeout=_HTTP_TIMEOUT)
         if r.status_code != 200:
-            return ""
+            return "", ""
         dati = r.json() or {}
     except (requests.RequestException, ValueError):
-        return ""
+        return "", ""
     if str(dati.get("stato", "")) == "403":
-        return ""
-    if str(dati.get("tipoIndirizzoStandard", "")).upper() == "CODICE":
-        return str(dati.get("indirizzoStandard", "") or "").strip()
-    return ""
+        return "", ""
+    tipo = str(dati.get("tipoIndirizzoStandard", "")).upper()
+    indirizzo = str(dati.get("indirizzoStandard", "") or "").strip()
+    if tipo == "CODICE":
+        return indirizzo, ""
+    if tipo == "PEC":
+        return "", indirizzo
+    return "", ""
 
 
 def recupera(auth, log=None) -> dict:
@@ -130,6 +139,7 @@ def recupera(auth, log=None) -> dict:
         "partita_iva": (getattr(auth, "piva", "") or "").strip(),
         "conservazione": False,
         "codice_destinatario": "",
+        "pec": "",
     }
 
     info = _fetch_full_template(auth)
@@ -141,13 +151,18 @@ def recupera(auth, log=None) -> dict:
             dati["partita_iva"] = str(info["pivaUtenteDiLavoro"]).strip()
 
     dati["conservazione"] = _fetch_conservazione(auth)
-    dati["codice_destinatario"] = _fetch_codice_destinatario(auth)
+    dati["codice_destinatario"], dati["pec"] = _fetch_canale(auth)
 
     if log:
+        canale = (f"SDI={dati['codice_destinatario']}" if dati["codice_destinatario"]
+                  else f"PEC={dati['pec']}" if dati["pec"] else "canale=-")
         log(f"Anagrafica AdE: denominazione={dati['denominazione']!r} "
-            f"piva={dati['partita_iva']!r} conservazione={dati['conservazione']} "
-            f"SDI={dati['codice_destinatario'] or '-'}")
+            f"piva={dati['partita_iva']!r} conservazione={dati['conservazione']} {canale}")
     return dati
+
+
+# I due canali di ricezione, trattati come coppia mutuamente esclusiva in `differenze`.
+_CANALE = ("codice_destinatario", "pec")
 
 
 def differenze(saved_row: dict, dati_ade: dict, fields=CAMPI_ADE) -> dict:
@@ -159,9 +174,16 @@ def differenze(saved_row: dict, dati_ade: dict, fields=CAMPI_ADE) -> dict:
     propone di cancellare un dato). P.IVA e codice destinatario si confrontano in
     maiuscolo (come li normalizza fec_deleghe). `conservazione` è un bool e si propone
     ogni volta che differisce.
+
+    Eccezione: `codice_destinatario` e `pec` sono i due canali di ricezione, mutuamente
+    esclusivi. Se AdE ha riportato un canale (almeno uno dei due valorizzato), si propone
+    di impostare quello attivo **e azzerare l'altro**; se AdE non ha letto alcun canale
+    (entrambi vuoti) non si tocca nulla.
     """
     diffs: dict = {}
     for k in fields:
+        if k in _CANALE:
+            continue  # gestiti insieme sotto
         nuovo = dati_ade.get(k)
         if k == "conservazione":
             nuovo_b, vecchio_b = bool(nuovo), bool(saved_row.get(k, False))
@@ -172,10 +194,22 @@ def differenze(saved_row: dict, dati_ade: dict, fields=CAMPI_ADE) -> dict:
         if not nuovo_s:
             continue  # AdE non ha fornito il dato → non proporre
         vecchio_s = str(saved_row.get(k, "") or "").strip()
-        if k in ("partita_iva", "codice_destinatario"):
+        if k == "partita_iva":
             nuovo_s = nuovo_s.upper()
             if nuovo_s != vecchio_s.upper():
                 diffs[k] = (vecchio_s, nuovo_s)
         elif nuovo_s != vecchio_s:
             diffs[k] = (vecchio_s, nuovo_s)
+
+    # Canale di ricezione (coppia esclusiva).
+    if any(c in fields for c in _CANALE):
+        cod_ade = str(dati_ade.get("codice_destinatario", "") or "").strip().upper()
+        pec_ade = str(dati_ade.get("pec", "") or "").strip()
+        if cod_ade or pec_ade:  # AdE ha letto un canale
+            cod_old = str(saved_row.get("codice_destinatario", "") or "").strip().upper()
+            pec_old = str(saved_row.get("pec", "") or "").strip()
+            if cod_ade != cod_old:
+                diffs["codice_destinatario"] = (cod_old, cod_ade)
+            if pec_ade != pec_old:
+                diffs["pec"] = (pec_old, pec_ade)
     return diffs

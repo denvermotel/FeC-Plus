@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# FeC-Plus - v0.03 alpha
+# FeC-Plus - v0.04 dev
 """
 fec_queue.py - Orchestrazione delle richieste, SOPRA l'engine di fec_download.py.
 
@@ -22,8 +22,9 @@ sessione, requisito per un eventuale server multi-utente.
 
 from __future__ import annotations
 
-__version__ = "0.03 alpha"
+__version__ = "0.04 dev"
 
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Callable
@@ -137,6 +138,11 @@ def esegui_richiesta(auth, tipo: str, *, dal: str | None = None, al: str | None 
     `control` (opzionale, `fec_download.Controllo`): pausa/annullamento cooperativo,
     controllato tra un blocco e l'altro e passato ai download per il controllo tra i file.
 
+    `csv_ade` (solo tipi "download"): oltre ai file scaricati genera nella stessa
+    cartella il CSV formato AdE dell'elenco (`fec_csv_ade`), UNO per l'intera
+    richiesta anche se il periodo è stato spezzato, con le sole righe superstiti
+    all'eventuale filtro per controparte.
+
     Ritorna:
       - tipo "download": un DownloadResult con i contatori sommati;
       - tipo "invio" (massive/corrispettivi): la lista dei codici richiesta (uno per blocco);
@@ -146,6 +152,12 @@ def esegui_richiesta(auth, tipo: str, *, dal: str | None = None, al: str | None 
         spec = TIPI[tipo]
     except KeyError:
         raise DownloadError(f"Tipo di richiesta sconosciuto: {tipo!r}.")
+
+    # CSV formato AdE: opzione dei soli download. Va consumata qui (non deve
+    # arrivare a fec_download) perché il file è UNO per l'intera richiesta,
+    # anche quando il periodo è stato spezzato in più blocchi.
+    csv_ade = bool(kwargs.pop("csv_ade", False)) and spec.kind == "download"
+    voci_csv: list = []
 
     # Bolli: nessun intervallo da spezzare (lo spezzettamento per trimestre è
     # gestito internamente da fec_download.scarica_bolli); inoltra comunque
@@ -168,6 +180,8 @@ def esegui_richiesta(auth, tipo: str, *, dal: str | None = None, al: str | None 
         if spec.kind == "download":
             # I download passano il control all'engine (controllo tra i file).
             extra["control"] = control
+            if csv_ade:
+                extra["voci_out"] = voci_csv
         elif spec.kind == "invio" and multi:
             # Nome XML univoco per blocco, così le richieste massive non si sovrascrivono.
             extra["suffisso_nome"] = f"_{d}_{a}"
@@ -178,6 +192,20 @@ def esegui_richiesta(auth, tipo: str, *, dal: str | None = None, al: str | None 
         if multi:
             log(f"\n✓ Totale {len(blocchi)} blocchi - "
                 f"fatture: {esito.fatture}, metadati: {esito.metadati}\nCartella: {esito.cartella}")
+        if csv_ade and voci_csv:
+            import fec_csv_ade
+            # Prefisso dal CF: nei download la P.IVA non fa parte dei kwargs (la
+            # consultazione usa solo il CF). L'export dalla tab Utility, che la
+            # conosce, usa `piva or cf` - quindi i due percorsi possono produrre
+            # nomi diversi per lo stesso soggetto: differenza nota e innocua.
+            percorso = fec_csv_ade.scrivi_csv(
+                os.path.join(esito.cartella,
+                             fec_csv_ade.nome_file(kwargs.get("cf_cliente", ""),
+                                                   dal, al, tipo)),
+                voci_csv, tipo)
+            log(f"CSV Agenzia Entrate ({len(voci_csv)} righe): {percorso}")
+        elif csv_ade:
+            log("CSV Agenzia Entrate non generato: nessuna fattura nel periodo.")
         return esito
 
     codici = [c for c in risultati if c]
@@ -205,6 +233,7 @@ class Richiesta:
     sottocartella: bool = True
     escludi_scartate_pa: bool = True
     estrai_p7m: bool = False
+    csv_ade: bool = False
 
 
 def _kwargs_richiesta(r: Richiesta) -> dict:
@@ -217,6 +246,7 @@ def _kwargs_richiesta(r: Richiesta) -> dict:
     if spec is not None and spec.kind == "download":
         kw["escludi_scartate_pa"] = r.escludi_scartate_pa
         kw["estrai_p7m"] = r.estrai_p7m
+        kw["csv_ade"] = r.csv_ade
     if spec is not None and spec.kind == "invio":
         kw["piva"] = r.piva
     if r.tipo == "bolli":

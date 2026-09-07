@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# FeC-Plus - v0.03 alpha
+# FeC-Plus - v0.04 dev
 """
 fec_deps.py - Controllo dipendenze, punto unico riusabile da GUI e CLI.
 
@@ -21,7 +21,7 @@ Ruoli delle dipendenze:
 
 from __future__ import annotations
 
-__version__ = "0.03 alpha"
+__version__ = "0.04 dev"
 
 import importlib.util
 import sys

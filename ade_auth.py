@@ -1,4 +1,4 @@
-# FeC-Plus - v0.03 alpha
+# FeC-Plus - v0.04 dev
 """
 ade_auth.py - Autenticazione al portale AdE "Fatture e Corrispettivi".
 
@@ -36,7 +36,7 @@ In caso di problema solleva AuthError(step, dettaglio).
 
 from __future__ import annotations
 
-__version__ = "0.03 alpha"
+__version__ = "0.04 dev"
 
 import json
 import re
@@ -135,6 +135,7 @@ PROFILO_STUDIO_CLIENTE = 1   # studio -> cliente (delegato per singolo soggetto)
 PROFILO_STUDIO_CASSETTO = 2  # studio -> cassetto dello studio (incaricato)
 PROFILO_ME_STESSO = 3        # opero sul mio CF (o libero professionista)
 PROFILO_AZIENDA = 4          # azienda: uso lo stesso meccanismo del cassetto studio
+PROFILO_DELEGA_DIRETTA = 5   # delega diretta: il soggetto delega me, senza intermediario
                              # (incaricato/incaricoDiretto), con l'incarico cercato
                              # per il CF dell'azienda invece che per il CF studio
                              # (confermato con una cattura HAR dal vivo)
@@ -144,6 +145,8 @@ _PROFILO_TIPOINCARICANTE = {
     PROFILO_STUDIO_CASSETTO: "incaricoDiretto",
     PROFILO_ME_STESSO: "incaricoDiretto",
     PROFILO_AZIENDA: "incaricoDiretto",
+    # PROFILO_DELEGA_DIRETTA non compare: quel flusso non passa da un incarico
+    # (niente `incaricante`/`tipoincaricante`), vedi `_payload_delega_diretta`.
 }
 
 
@@ -182,7 +185,8 @@ class Creds:
     cfstudio: str = ""       # CF/P.IVA dello studio (incaricante), per profili 2/3
     cf_cliente: str = ""     # CF del cliente delegante (profilo 1) o dell'azienda (profilo 4)
     piva: str = ""           # P.IVA dell'utenza di lavoro da attivare
-    profilo: int = 1         # 1=Studio->cliente  2=Studio->cassetto  3=Me stesso  4=Azienda
+    profilo: int = 1         # 1=Studio->cliente  2=Studio->cassetto  3=Me stesso
+                             # 4=Azienda  5=Delega diretta (soggetto in `cf_cliente`)
 
 
 @dataclass
@@ -801,6 +805,13 @@ def _select_incaricante(page, cfstudio: str, log) -> bool:
     return False
 
 
+# NOTA (rilievo di revisione, 2026-08-11): il wizard del backend BROWSER non gestisce
+# `PROFILO_DELEGA_DIRETTA`. `_scegli_per_chi_operare` ricadrebbe sul default
+# «incaricoDelega» e il campo `cfDelegante` non verrebbe compilato, quindi con quel
+# backend la modalità «Delega diretta» va completata a mano nella finestra. Il flusso
+# REST (`_wizard_requests`, usato da backend «requests» e «sso», cioè da tutta la GUI
+# pubblica) la implementa correttamente. Da sistemare se e quando il backend browser
+# tornerà a essere un percorso di uso normale.
 def _scegli_per_chi_operare(page, profilo: int) -> bool:
     """
     Seleziona la modalità operativa (radio name=tipoincaricante). I radio sono
@@ -842,7 +853,8 @@ def _scegli_per_chi_operare(page, profilo: int) -> bool:
 
 def _scegli_tipoutenza(page, profilo: int) -> bool:
     """Step 1: 'Me stesso' / 'Incaricato' (radio Bootstrap nascosti -> force)."""
-    val = "meStesso" if profilo == PROFILO_ME_STESSO else "incaricato"
+    val = {PROFILO_ME_STESSO: "meStesso",
+           PROFILO_DELEGA_DIRETTA: "delegaDiretta"}.get(profilo, "incaricato")
     r = page.locator(f'input[name="tipoutenza"][value="{val}"]')
     if r.count():
         try:
@@ -1096,6 +1108,162 @@ def cattura_har_navigazione(nomeutente: str, pin: str, password: str,
     return har_path, log_path
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Backend SSO (SPID / CIE / CNS) - login a mano nel browser, poi si prosegue in requests
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Cookie che il portale imposta SOLO a login completato: è il segnale che l'utente
+# ha finito con l'Identity Provider, qualunque esso sia (SPID, CIE, CNS). Vale per
+# tutti gli IdP, quindi evita di dover riconoscere le pagine dei singoli provider.
+COOKIE_LOGIN_FATTO = "FATSC"
+
+# Chiavi del localStorage della SPA dove finiscono i due token di servizio: sono
+# esattamente i valori degli header x-b2bcookie / x-token che usiamo ovunque.
+LS_TOKEN_B2B = "FattCorrActiveB2B"
+LS_TOKEN = "FattCorrActiveToken"
+
+CONS_WEB = f"{IVASERVIZI}/cons/cons-web/"
+
+
+def _attendi_login_sso(context, timeout_s: int, log) -> bool:
+    """
+    Attende che l'utente completi l'accesso nel browser, sorvegliando la comparsa
+    del cookie `FATSC`. Ritorna False allo scadere del tempo.
+    """
+    import time as _time
+    scadenza = _time.monotonic() + timeout_s
+    ultimo_avviso = 0.0
+    fallimenti = 0
+    while _time.monotonic() < scadenza:
+        _time.sleep(1)
+        try:
+            nomi = {c["name"] for c in context.cookies()}
+            fallimenti = 0
+        except Exception:
+            # Una lettura fallita è normale tra un redirect e l'altro; tre di fila
+            # vogliono dire che il contesto non c'è più (finestra chiusa dall'utente).
+            fallimenti += 1
+            if fallimenti >= 3:
+                log("   Finestra del browser chiusa prima del completamento.")
+                return False
+            continue
+        if COOKIE_LOGIN_FATTO in nomi:
+            return True
+        rimasti = scadenza - _time.monotonic()
+        if rimasti < ultimo_avviso - 60 or ultimo_avviso == 0.0:
+            ultimo_avviso = rimasti
+            log(f"   ...in attesa dell'accesso ({int(rimasti // 60)} min rimanenti)")
+    return False
+
+
+def _token_da_localstorage(context) -> tuple[str, str]:
+    """
+    Legge x-b2bcookie / x-token dal localStorage della SPA di consultazione.
+    Usato come RIPIEGO quando il wizard REST non riesce ad attivare l'utenza: in quel
+    caso i token ci sono già, perché li ha ottenuti la SPA nel browser.
+    Ritorna ("", "") se non trovati.
+    """
+    for pagina in context.pages:
+        try:
+            if "ivaservizi.agenziaentrate.gov.it" not in pagina.url:
+                continue
+            voci = pagina.evaluate(
+                "() => { const o = {};"
+                " for (let i = 0; i < localStorage.length; i++) {"
+                " const k = localStorage.key(i); o[k] = localStorage.getItem(k); }"
+                " return o; }")
+        except Exception:
+            continue
+        if voci:
+            b2b = str(voci.get(LS_TOKEN_B2B) or "")
+            tok = str(voci.get(LS_TOKEN) or "")
+            if b2b and tok:
+                return b2b, tok
+    return "", ""
+
+
+def _autentica_sso(creds: Creds, log=print, timeout_ms: int = 300_000,
+                   scegli_piva=None) -> AuthResult:
+    """
+    Accesso con **SPID / CIE / CNS**: apre Chromium VISIBILE sulla pagina di accesso
+    del portale e lascia che sia l'utente a completare l'autenticazione presso il
+    proprio Identity Provider (QR code, PIN della carta, OTP, app...). Quei flussi non
+    sono riproducibili via `requests`, quindi il browser è obbligatorio in questa fase.
+
+    Completato l'accesso (rilevato dal cookie `FATSC`), la sessione viene travasata in
+    una `requests.Session` e da lì in poi il percorso è **lo stesso degli altri
+    backend**: wizard di scelta utenza via REST e token B2B. Se il wizard non riesce
+    (flusso post-SSO diverso da quello Entratel), si ripiega sui token che la SPA ha
+    già scritto nel localStorage, purché l'utenza di lavoro sia stata scelta nel
+    browser: in quel caso l'AuthResult è completo dei soli dati di sessione.
+
+    `headless` non è previsto: senza finestra visibile l'utente non può autenticarsi.
+    """
+    try:
+        from playwright.sync_api import sync_playwright  # type: ignore
+    except ImportError:
+        raise AuthError(
+            "dipendenza",
+            "L'accesso con SPID/CIE richiede Playwright (browser Chromium). "
+            "Installalo con «pip install playwright» seguito da "
+            "«python -m playwright install chromium».")
+
+    note: list = []
+    timeout_s = max(60, int(timeout_ms / 1000))
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=False)
+        # Stesso User-Agent della sessione requests in cui la sessione verrà
+        # travasata: se il portale legasse la sessione allo UA, un mismatch la
+        # invaliderebbe subito dopo la chiusura del browser.
+        context = browser.new_context(viewport={"width": 1280, "height": 900},
+                                      user_agent=_UA, ignore_https_errors=True)
+        pagina = context.new_page()
+        log("Apro il browser: completa l'accesso con SPID/CIE nella finestra.")
+        log("   (la finestra si chiude da sola appena l'accesso è riuscito)")
+        pagina.goto(CONS_WEB)
+
+        if not _attendi_login_sso(context, timeout_s, log):
+            browser.close()
+            raise AuthError("login", f"Accesso non completato entro {timeout_s // 60} "
+                                     "minuti: riprova.")
+        log("✅ Accesso rilevato.")
+
+        # Lascia finire i redirect post-login e carica la SPA, così il localStorage
+        # si popola: serve al ripiego più sotto.
+        for azione in (lambda: pagina.wait_for_load_state("networkidle", timeout=30_000),
+                       lambda: pagina.goto(CONS_WEB),
+                       lambda: pagina.wait_for_load_state("networkidle", timeout=30_000)):
+            try:
+                azione()
+            except Exception:
+                pass
+        b2b_ls, tok_ls = _token_da_localstorage(context)
+        s = _session_da_browser(context)
+        browser.close()
+
+    # Da qui in poi è il percorso comune agli altri backend.
+    try:
+        piva, disponibili, denom, cons = _wizard_requests(s, creds, log=log,
+                                                          scegli_piva=scegli_piva)
+        return _finalizza(s, "sso", creds.cf_cliente or creds.nomeutente, note,
+                          piva=piva, piva_disponibili=disponibili,
+                          denominazione=denom, conservazione=cons)
+    except (AuthError, requests.RequestException) as exc:
+        if not (b2b_ls and tok_ls):
+            raise
+        # Ripiego: l'utenza di lavoro è già attiva nel browser e i token sono nel
+        # localStorage della SPA. Non abbiamo P.IVA/denominazione dal wizard.
+        log(f"⚠️  Wizard non riuscito ({exc}); uso i token già ottenuti dal browser.")
+        note.append("Utenza di lavoro scelta nel browser: P.IVA e denominazione non "
+                    "rilevate dal wizard.")
+        headers = _build_headers(b2b_ls, tok_ls)
+        s.headers.update(headers)
+        _accetta_disclaimer(s, headers)
+        return AuthResult(session=s, headers=headers, xb2bcookie=b2b_ls, xtoken=tok_ls,
+                          utenza=creds.cf_cliente or creds.nomeutente, backend="sso",
+                          note=note, piva=creds.piva)
+
+
 def _session_da_browser(context) -> requests.Session:
     """Costruisce una requests.Session con i cookie del browser."""
     s = _nuova_sessione()
@@ -1283,6 +1451,23 @@ def _risolvi_piva(disponibili: list, piva_preferita: str, scegli_piva, log) -> s
     return piva_preferita
 
 
+def _payload_delega_diretta(cf_cliente: str) -> dict:
+    """
+    Corpo del wizard per la **delega diretta**: il soggetto ha delegato direttamente
+    questa utenza, senza intermediario, quindi non c'è un «incarico» da selezionare
+    (niente `incaricante`/`tipoincaricante`/`cfDelegante` come nei profili 1/2/4).
+
+    Lo stesso corpo va inviato sia a `procediWizard` sia a `setUserChoice`. Se
+    l'identificativo indicato è una P.IVA (11 cifre) viene passato anche come `pIva`,
+    perché in quel caso il portale lo usa per individuare il soggetto.
+    """
+    target = (cf_cliente or "").strip().upper()
+    payload = {"tipoutenza": "delegaDiretta", "tipoDelega": "delDiretta", "cf": target}
+    if target.isdigit() and len(target) == 11:
+        payload["pIva"] = target
+    return payload
+
+
 def _wizard_requests(s: requests.Session, creds: Creds, log=print,
                      scegli_piva=None) -> tuple[str, list, str, bool]:
     """
@@ -1325,7 +1510,12 @@ def _wizard_requests(s: requests.Session, creds: Creds, log=print,
     except requests.RequestException as exc:
         log(f"   ⚠️  wizardTemplate non raggiungibile: {exc}")
 
-    tipoutenza = "soloPerMe" if creds.profilo == PROFILO_ME_STESSO else "incaricato"
+    if creds.profilo == PROFILO_DELEGA_DIRETTA:
+        tipoutenza = "delegaDiretta"
+    elif creds.profilo == PROFILO_ME_STESSO:
+        tipoutenza = "soloPerMe"
+    else:
+        tipoutenza = "incaricato"
     tipoincaricante = _PROFILO_TIPOINCARICANTE.get(creds.profilo, "incaricoDelega")
 
     # step 1: scelta del tipo di utenza. La risposta contiene anch'essa gli incarichi:
@@ -1342,6 +1532,35 @@ def _wizard_requests(s: requests.Session, creds: Creds, log=print,
                 pass
     except requests.RequestException as exc:
         log(f"   ⚠️  procediWizard non raggiungibile: {exc}")
+
+    # Delega diretta: il soggetto (azienda o persona) ha delegato direttamente questa
+    # utenza, senza passare da un intermediario. Non c'è alcun incarico da cercare nel
+    # wizardTemplate: si indica il CF del delegante e si conferma.
+    if creds.profilo == PROFILO_DELEGA_DIRETTA:
+        payload = _payload_delega_diretta(creds.cf_cliente)
+        if not payload["cf"]:
+            raise AuthError("utenza", "Delega diretta: indicare il CF (o la P.IVA) del "
+                                      "soggetto che ha conferito la delega.")
+        piva_disponibili: list = []
+        try:
+            r = s.post(f"{INSTR_REST}/procediWizard?v={unix_time()}",
+                       headers=_instr_headers(x_appl),
+                       data=json.dumps(payload), verify=False, timeout=30)
+            log(f"   procediWizard(delegaDiretta) HTTP {r.status_code}")
+            try:
+                piva_disponibili = (r.json() or {}).get("PIva") or []
+            except ValueError:
+                log("   ⚠️  procediWizard(delegaDiretta) non JSON: P.IVA non ricavata dal CF.")
+        except requests.RequestException as exc:
+            log(f"   ⚠️  procediWizard(delegaDiretta) non raggiungibile: {exc}")
+
+        piva_scelta = _risolvi_piva(piva_disponibili, creds.piva, scegli_piva, log)
+        conferma = dict(payload)
+        if piva_scelta and len(_elenco_piva(piva_disponibili)) > 1:
+            conferma["pIva"] = piva_scelta
+        resp = _setuserchoice(s, x_appl, conferma, log)
+        denom, cons = _anagrafica_da_utente(resp)
+        return piva_scelta or payload.get("pIva", ""), piva_disponibili, denom, cons
 
     # Me stesso: nessun incarico, si conferma direttamente il proprio CF.
     if creds.profilo == PROFILO_ME_STESSO:
@@ -1476,6 +1695,10 @@ def autentica(creds: Creds, backend: str = "browser",
     backend:
       "browser"  -> Playwright (default, affidabile; headless opzionale)
       "requests" -> sole richieste HTTP (leggero ma fragile)
+      "sso"      -> SPID/CIE/CNS: browser VISIBILE, l'utente si autentica presso il
+                    proprio Identity Provider, poi si prosegue via requests. Ignora
+                    `headless` (senza finestra l'utente non può autenticarsi) e non
+                    usa nomeutente/pin/password.
 
     capture_dir: se valorizzato (solo backend browser), registra il traffico di rete
       del login/wizard in `<capture_dir>/capture_login_<ts>.har` (HAR completo) e in un
@@ -1494,7 +1717,10 @@ def autentica(creds: Creds, backend: str = "browser",
     if backend == "browser":
         return _autentica_browser(creds, headless=headless, log=log,
                                   capture_dir=capture_dir, scegli_piva=scegli_piva)
-    raise AuthError("config", f"Backend sconosciuto: {backend!r} (usa 'browser' o 'requests').")
+    if backend == "sso":
+        return _autentica_sso(creds, log=log, scegli_piva=scegli_piva)
+    raise AuthError("config", f"Backend sconosciuto: {backend!r} "
+                              "(usa 'browser', 'requests' o 'sso').")
 
 
 def seleziona_utenza(auth: AuthResult, creds: Creds, log=print,

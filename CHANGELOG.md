@@ -2,7 +2,16 @@
 
 Tutte le novità delle versioni e la roadmap delle funzioni future. Progetto in fase **alpha**.
 
-## [0.03 alpha] - versione attuale (luglio 2026)
+## [0.04 alpha] - in lavorazione
+
+### Accesso
+- **NEW** **Accesso con SPID / CIE**: spuntando «Accedi con SPID / CIE» si apre il browser, ci si autentica presso il proprio gestore di identità (QR code, PIN della carta, OTP) e l'applicazione prosegue da sola. Le credenziali Entratel non servono e i relativi campi restano vuoti.
+- **NEW** Nuova modalità di accesso **«Delega diretta»**, per i casi in cui il soggetto ha delegato direttamente questa utenza senza passare da un intermediario. Il codice fiscale (o la partita IVA) del delegante va nel campo «CF Cliente».
+
+### Esportazioni
+- **NEW** **Export CSV nel formato dell'Agenzia delle Entrate** dell'elenco fatture: lo stesso file prodotto dal pulsante «Esporta la tabella» del portale, richiesto dai software di contabilità per la riconciliazione. Disponibile come opzione nel **Download Standard** (un solo file per l'intero periodo, con le sole fatture effettivamente scaricate), come formato alternativo all'Excel nella scheda **Utility** e da riga di comando (`--csv-ade`, comando `csv-fatture`). Copre fatture emesse, ricevute, messe a disposizione e transfrontaliere.
+
+## [0.03 alpha] (luglio 2026)
 
 ### Modalità di accesso
 - **NEW** **modalità di accesso utente-friendly**, scelte da un unico selettore nel riquadro «Credenziali Entratel»: **Studio - Delega Cliente**, **Studio - Cassetto proprio**, **Azienda**, **Libero professionista / Me stesso**.

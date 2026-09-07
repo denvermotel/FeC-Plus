@@ -69,7 +69,7 @@ playwright install chromium</code></pre>
       </ul>
 
       <h3>Modalità di accesso e schede</h3>
-      <p class="sub">Nel riquadro <strong>«Credenziali Entratel»</strong> si sceglie una volta sola la <strong>modalità di accesso</strong> (Studio - Delega Cliente, Studio - Cassetto proprio, Azienda, Libero professionista/Me stesso), valida per tutte le schede. Oltre a <strong>Download Standard</strong> sono disponibili <strong>Richieste Massive</strong> (con scaricamento dei risultati delle richieste già inviate), <strong>Bolli Virtuali</strong>, <strong>Utility</strong> (esportazione Excel) e <strong>Deleghe</strong> (anagrafica clienti delegati, con import/export CSV).</p>
+      <p class="sub">Nel riquadro <strong>«Credenziali Entratel»</strong> si sceglie una volta sola la <strong>modalità di accesso</strong> (Studio - Delega Cliente, Studio - Cassetto proprio, Azienda, Libero professionista/Me stesso, Delega diretta) e, se si preferisce, l'accesso con <strong>SPID/CIE</strong> al posto delle credenziali Entratel, valida per tutte le schede. Oltre a <strong>Download Standard</strong> sono disponibili <strong>Richieste Massive</strong> (con scaricamento dei risultati delle richieste già inviate), <strong>Bolli Virtuali</strong>, <strong>Utility</strong> (esportazione Excel e CSV formato Agenzia delle Entrate) e <strong>Deleghe</strong> (anagrafica clienti delegati, con import/export CSV).</p>
 
       <h3>Cartelle di download (Impostazioni)</h3>
       <p class="sub">In <strong>⚙ Impostazioni</strong> si imposta la cartella di download di default e, se serve, una cartella diversa per ogni tipo di documento.</p>
@@ -77,6 +77,13 @@ playwright install chromium</code></pre>
         <li>Per impostazione predefinita tutti i download vanno in <strong>un'unica cartella</strong>, in sottocartelle per tipo e codice fiscale (es. <code>FattureEmesse_&lt;CF&gt;</code>).</li>
         <li>Spuntando <strong>«personalizza»</strong> accanto a una classe (fatture emesse, ricevute, transfrontaliere, massive, corrispettivi, bolli) si assegna a quel tipo una <strong>cartella dedicata</strong>.</li>
         <li>L'opzione <strong>«senza sottocartella»</strong> (per ciascun tipo) salva i file <strong>direttamente</strong> nella cartella scelta, senza creare la sottocartella: utile per importarli nelle directory dei <strong>gestionali di contabilità</strong>.</li>
+      </ul>
+
+      <h3>Elenco fatture in CSV (formato Agenzia delle Entrate)</h3>
+      <p class="sub">È lo stesso file che il portale produce col pulsante <strong>«Esporta la tabella»</strong>: serve ai <strong>software di contabilità</strong>, che per la riconciliazione lo pretendono in quel formato esatto. Si ottiene in due modi.</p>
+      <ul>
+        <li>Nella scheda <strong>Download Standard</strong>, spuntando <strong>«Genera anche il CSV dell'elenco»</strong>: il file viene salvato accanto alle fatture scaricate, <strong>uno solo per l'intero periodo</strong> anche quando questo viene spezzato in blocchi, e contiene <strong>solo le fatture effettivamente scaricate</strong> (quindi rispetta anche l'eventuale filtro per controparte).</li>
+        <li>Nella scheda <strong>Utility</strong>, scegliendo il formato <strong>«CSV Agenzia Entrate»</strong> al posto dell'Excel: in questo caso non viene scaricata nessuna fattura, si genera solo l'elenco. Non richiede il pacchetto <code>openpyxl</code> e non legge il dettaglio delle singole fatture, quindi è immediato anche su periodi ampi; in cambio non ha le colonne per aliquota IVA dell'Excel. Non è disponibile per i Corrispettivi.</li>
       </ul>
     </div>
   </section>
@@ -99,10 +106,11 @@ playwright install chromium</code></pre>
         <tr><td><code>--cfstudio</code></td><td>CF dello studio incaricante (profili 1 e 2).</td></tr>
         <tr><td><code>--cf-cliente</code></td><td>CF del cliente delegante, o dell'azienda per <code>--profilo 4</code>.</td></tr>
         <tr><td><code>--piva</code></td><td>P.IVA dell'utenza di lavoro (richiesta da massive e bolli).</td></tr>
-        <tr><td><code>--profilo {1,2,3,4}</code></td><td>1 = Studio - Delega Cliente · 2 = Studio - Cassetto proprio · 3 = Libero professionista/Me stesso · 4 = Azienda. Default: 1.</td></tr>
-        <tr><td><code>--backend {requests,browser}</code></td><td>Backend di login. Default: <code>requests</code> (nessun browser).</td></tr>
+        <tr><td><code>--profilo {1,2,3,4,5}</code></td><td>1 = Studio - Delega Cliente · 2 = Studio - Cassetto proprio · 3 = Libero professionista/Me stesso · 4 = Azienda · 5 = Delega diretta (soggetto in <code>--cf-cliente</code>). Default: 1.</td></tr>
+        <tr><td><code>--backend {requests,browser,sso}</code></td><td>Backend di login. Default: <code>requests</code> (nessun browser). <code>sso</code> = accesso con SPID/CIE: si apre il browser e ci si autentica a mano, <code>--pin</code> e <code>--password</code> non vengono usati.</td></tr>
         <tr><td><code>--no-headless</code></td><td>Mostra la finestra del browser (solo backend <code>browser</code>).</td></tr>
         <tr><td><code>--dest DIR</code></td><td>Cartella di destinazione dei download. Default: <code>./Download</code>.</td></tr>
+        <tr><td><code>--csv-ade</code></td><td>Genera anche il CSV dell'elenco nel formato «Esporta la tabella» del portale (solo comandi di download).</td></tr>
         <tr><td><code>--dry-run</code></td><td>Mostra cosa verrebbe eseguito, senza fare login né download.</td></tr>
       </table>
 
@@ -114,6 +122,7 @@ playwright install chromium</code></pre>
         <tr><td><code>transfrontaliere-emesse</code></td><td>Transfrontaliere emesse</td><td><code>--dal --al</code></td><td>ggmmaaaa</td></tr>
         <tr><td><code>transfrontaliere-ricevute</code></td><td>Transfrontaliere ricevute</td><td><code>--dal --al</code></td><td>ggmmaaaa</td></tr>
         <tr><td><code>messe-a-disposizione</code></td><td>Fatture messe a disposizione</td><td><code>--dal --al</code></td><td>ggmmaaaa</td></tr>
+        <tr><td><code>csv-fatture</code></td><td>Solo il CSV formato AdE dell'elenco (nessun file fattura)</td><td><code>--dal --al [--tipo ...]</code></td><td>ggmmaaaa</td></tr>
         <tr><td><code>massive-emesse</code></td><td>Richiesta massiva emesse</td><td><code>--dal --al</code></td><td>aaaa-mm-gg</td></tr>
         <tr><td><code>massive-ricevute-emissione</code></td><td>Massiva ricevute (data emissione)</td><td><code>--dal --al</code></td><td>aaaa-mm-gg</td></tr>
         <tr><td><code>massive-ricevute-ricezione</code></td><td>Massiva ricevute (data ricezione)</td><td><code>--dal --al</code></td><td>aaaa-mm-gg</td></tr>
@@ -122,10 +131,6 @@ playwright install chromium</code></pre>
         <tr><td><code>bolli</code></td><td>Bolli virtuali → riepilogo CSV</td><td><code>--trimestre 1|2|3|4|tutti --anno aaaa</code></td><td>-</td></tr>
       </table>
       <p class="sub" style="margin-top:6px"><code>--tipo-data</code>: 1 = ricerca per data ricezione (default), 2 = per data emissione. <code>--trimestre tutti</code>: riepilogo sull'intero anno invece che su un singolo trimestre.</p>
-
-      <div class="note">
-        ℹ️ Il modello F24 <strong>non è generabile</strong> da questa procedura del portale AdE (limite dell'AdE, non dell'app): il comando <code>bolli</code> produce un riepilogo CSV con elenco A/B, importo calcolato, scadenza e dati di pagamento.
-      </div>
 
       <div class="note">
         ⚠️ <strong>Sicurezza:</strong> le credenziali passate come argomenti restano visibili nella

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# FeC-Plus - v0.03 alpha
+# FeC-Plus - v0.04 dev
 """
 fec_cli.py - Interfaccia a riga di comando per FeC-Plus, SENZA GUI.
 
@@ -28,7 +28,7 @@ Esempi:
 
 from __future__ import annotations
 
-__version__ = "0.03 alpha"
+__version__ = "0.04 dev"
 
 import argparse
 import os
@@ -59,10 +59,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ── Argomenti di ACCESSO (comuni a tutti i comandi, prima del COMANDO) ──
     acc = parser.add_argument_group("accesso")
-    acc.add_argument("--cf", required=True,
-                     help="CF Fisconline o nome utente Entratel (IDToken1)")
-    acc.add_argument("--pin", required=True, help="PIN (IDToken3)")
-    pwd = parser.add_mutually_exclusive_group(required=True)
+    # Non obbligatori a livello di parser: con «--backend sso» non servono affatto
+    # (ci si autentica nel browser). La verifica è in `_verifica_accesso`, che dà un
+    # errore mirato invece del messaggio generico di argparse.
+    acc.add_argument("--cf",
+                     help="CF Fisconline o nome utente Entratel (IDToken1). "
+                          "Obbligatorio salvo «--backend sso»")
+    acc.add_argument("--pin", help="PIN (IDToken3). Obbligatorio salvo «--backend sso»")
+    pwd = parser.add_mutually_exclusive_group()
     pwd.add_argument("--password", help="Password (IDToken2)")
     pwd.add_argument("--password-env", metavar="VAR",
                      help="Nome della variabile d'ambiente da cui leggere la password")
@@ -71,11 +75,13 @@ def build_parser() -> argparse.ArgumentParser:
     acc.add_argument("--cf-cliente", default="",
                      help="CF del cliente delegante, o dell'azienda per --profilo 4")
     acc.add_argument("--piva", default="", help="P.IVA dell'utenza di lavoro (massive/bolli)")
-    acc.add_argument("--profilo", type=int, choices=(1, 2, 3, 4), default=1,
+    acc.add_argument("--profilo", type=int, choices=(1, 2, 3, 4, 5), default=1,
                      help="1=studio→cliente, 2=cassetto studio, 3=me stesso/libero "
-                          "professionista, 4=azienda (ipotesi non verificata dal vivo)")
-    acc.add_argument("--backend", choices=("requests", "browser"), default="requests",
-                     help="Backend di login")
+                          "professionista, 4=azienda, 5=delega diretta (soggetto in "
+                          "--cf-cliente)")
+    acc.add_argument("--backend", choices=("requests", "browser", "sso"), default="requests",
+                     help="Backend di login. «sso» = SPID/CIE/CNS: apre il browser e "
+                          "aspetti di autenticarti a mano (ignora --pin/--password)")
     acc.add_argument("--no-headless", dest="headless", action="store_false", default=True,
                      help="Mostra la finestra del browser (solo backend browser)")
     acc.add_argument("--dest", default=None,
@@ -86,6 +92,9 @@ def build_parser() -> argparse.ArgumentParser:
     acc.add_argument("--estrai-p7m", action="store_true", default=False,
                      help="Estrae l'XML dai file firmati .p7m al posto dell'originale "
                           "(richiede il pacchetto asn1crypto)")
+    acc.add_argument("--csv-ade", action="store_true", default=False,
+                     help="Genera anche il CSV dell'elenco nel formato «Esporta la "
+                          "tabella» del portale AdE (solo per i comandi di download)")
     acc.add_argument("--dry-run", action="store_true",
                      help="Mostra cosa verrebbe eseguito, senza fare login né download")
 
@@ -105,6 +114,15 @@ def build_parser() -> argparse.ArgumentParser:
                                    help="Transfrontaliere ricevute"), "ggmmaaaa")
     _add_date_range(sub.add_parser("messe-a-disposizione",
                                    help="Fatture messe a disposizione"), "ggmmaaaa")
+
+    spc = sub.add_parser("csv-fatture",
+                         help="Solo il CSV formato AdE dell'elenco fatture "
+                              "(nessun file fattura scaricato)")
+    _add_date_range(spc, "ggmmaaaa")
+    spc.add_argument("--tipo", default="emesse",
+                     choices=("emesse", "ricevute_ricezione", "ricevute_emissione",
+                              "trans_emesse", "trans_ricevute"),
+                     help="Tipo di elenco da esportare")
 
     _add_date_range(sub.add_parser("massive-emesse",
                                    help="Richiesta massiva fatture emesse"), "aaaa-mm-gg")
@@ -143,6 +161,14 @@ _CMD_TIPO = {
 
 def _dispatch(args, auth, fq):
     """Instrada il comando a fec_queue.esegui_richiesta (spezzettamento periodi)."""
+    # Export CSV AdE autonomo: non passa da fec_queue (nessun download di file),
+    # ma da fec_utility, che interroga solo le liste.
+    if args.comando == "csv-fatture":
+        import fec_utility
+        return fec_utility.elenco_fatture_csv_ade(
+            auth, args.cf_cliente, args.piva, args.tipo, args.dal, args.al,
+            dest_dir=args.dest)
+
     tipo = _CMD_TIPO.get(args.comando)
     if tipo is None:
         raise SystemExit(f"Comando sconosciuto: {args.comando}")
@@ -153,6 +179,7 @@ def _dispatch(args, auth, fq):
     if spec.kind == "download":
         kw["escludi_scartate_pa"] = args.escludi_scartate_pa
         kw["estrai_p7m"] = args.estrai_p7m
+        kw["csv_ade"] = args.csv_ade
     if spec.kind == "invio":
         kw["piva"] = args.piva
     if tipo == "bolli":
@@ -161,7 +188,25 @@ def _dispatch(args, auth, fq):
                                al=getattr(args, "al", None), **kw)
 
 
+def _verifica_accesso(args) -> None:
+    """Con i backend a credenziali (requests/browser) CF, PIN e password sono
+    obbligatori; con «sso» non servono e vanno anzi ignorati."""
+    if args.backend == "sso":
+        return
+    mancanti = [nome for nome, valore in (("--cf", args.cf), ("--pin", args.pin))
+                if not valore]
+    if args.password is None and not args.password_env:
+        mancanti.append("--password (oppure --password-env)")
+    if mancanti:
+        raise SystemExit(
+            "Argomenti obbligatori mancanti: " + ", ".join(mancanti)
+            + f".\n   Con «--backend {args.backend}» servono le credenziali Entratel; "
+              "per accedere con SPID/CIE usa «--backend sso».")
+
+
 def _risolvi_password(args) -> str:
+    if args.backend == "sso":
+        return ""      # l'accesso avviene nel browser: nessuna password da passare
     if args.password is not None:
         return args.password
     val = os.environ.get(args.password_env or "", "")
@@ -172,16 +217,17 @@ def _risolvi_password(args) -> str:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    _verifica_accesso(args)
     password = _risolvi_password(args)
 
     if args.dry_run:
         print(f"[dry-run] comando: {args.comando}")
-        print(f"  accesso : cf={args.cf} profilo={args.profilo} "
+        print(f"  accesso : cf={args.cf or '-'} profilo={args.profilo} "
               f"backend={args.backend} headless={args.headless}")
         print(f"  soggetti: cf_cliente={args.cf_cliente!r} piva={args.piva!r} "
               f"cfstudio={args.cfstudio!r}")
-        for k in ("dal", "al", "tipo_data", "trimestre", "anno", "dest",
-                  "escludi_scartate_pa", "estrai_p7m"):
+        for k in ("dal", "al", "tipo", "tipo_data", "trimestre", "anno", "dest",
+                  "escludi_scartate_pa", "estrai_p7m", "csv_ade"):
             if hasattr(args, k):
                 print(f"  {k} = {getattr(args, k)!r}")
         print("  (login e download NON eseguiti)")
@@ -195,9 +241,12 @@ def main(argv=None) -> int:
         print("   Installa con:  " + fec_deps.pip_install_hint(missing["core"]),
               file=sys.stderr)
         return 3
-    if args.backend == "browser" and "playwright" in missing["browser"]:
-        print("❌ Backend «browser» richiesto ma Playwright non è installato.", file=sys.stderr)
-        print("   Usa «--backend requests» oppure installa Playwright:", file=sys.stderr)
+    if args.backend in ("browser", "sso") and "playwright" in missing["browser"]:
+        quale = ("L'accesso con SPID/CIE" if args.backend == "sso"
+                 else "Il backend «browser»")
+        print(f"❌ {quale} richiede Playwright, che non è installato.", file=sys.stderr)
+        print("   Usa «--backend requests» (credenziali Entratel) oppure installa Playwright:",
+              file=sys.stderr)
         print("   " + fec_deps.pip_install_hint(["playwright"])
               + " && python -m playwright install chromium", file=sys.stderr)
         return 3

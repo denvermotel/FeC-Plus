@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# FeC-Plus - v0.03 alpha
+# FeC-Plus - v0.04 dev
 """
 fec_download.py - Download fatture elettroniche dal portale AdE "Fatture e
 Corrispettivi", a partire da una sessione GIÀ autenticata.
@@ -42,7 +42,7 @@ Risultati delle Richieste Massive:
 
 from __future__ import annotations
 
-__version__ = "0.03 alpha"
+__version__ = "0.04 dev"
 
 import csv
 import os
@@ -213,10 +213,59 @@ def _get_con_retry(auth: AuthResult, url: str, log, tentativi: int = 3):
     )
 
 
+def _campo_ci(d: dict, nome: str):
+    """Valore di `nome` in `d` con match case-insensitive sulla chiave (nomi campo
+    JSON AdE non garantiti in un unico casing)."""
+    for k, v in d.items():
+        if k.lower() == nome.lower():
+            return v
+    return None
+
+
+# Suffissi dei campi JSON della controparte nella voce di lista, per ruolo
+# (confermati dal dump di discovery `_materiale/dump_lista_emesse.json`):
+# nelle EMESSE la controparte è il Cliente (`pivaCliente`/`cfCliente`); nelle
+# RICEVUTE è chi ha emesso la fattura, che l'AdE chiama Emittente
+# (`pivaEmittente`/`cfEmittente`); Cedente/Cessionario/Fornitore come alias
+# difensivi per le transfrontaliere (nomi non ancora confermati sul vivo).
+_SUFFISSI_CONTROPARTE = {
+    "cliente":   ("Cliente", "Cessionario"),
+    "fornitore": ("Emittente", "Cedente", "Fornitore"),
+}
+
+
+def _match_controparte(fattura: dict, filtro_piva: str, filtro_cf: str,
+                       ruolo: str = "cliente") -> bool:
+    """
+    True se `fattura` (voce di lista) ha come controparte la P.IVA e/o il CF
+    indicati. `ruolo` è il ruolo della controparte nella fattura: "cliente" per
+    le emesse, "fornitore" per le ricevute (vedi _SUFFISSI_CONTROPARTE per i
+    nomi campo corrispondenti). Nessun filtro indicato ⇒ sempre True.
+
+    P.IVA e CF identificano lo STESSO soggetto: se indicati entrambi basta che
+    UNO corrisponda (la voce di lista a volte espone solo uno dei due campi,
+    ad es. `cfCliente` assente per alcune società). Usa il primo suffisso con
+    almeno un campo valorizzato.
+    """
+    if not filtro_piva and not filtro_cf:
+        return True
+    for suffisso in _SUFFISSI_CONTROPARTE.get(ruolo, ()):
+        piva = str(_campo_ci(fattura, f"piva{suffisso}") or "").strip()
+        cf = str(_campo_ci(fattura, f"cf{suffisso}") or "").strip()
+        if not (piva or cf):
+            continue
+        return ((bool(filtro_piva) and piva.upper() == filtro_piva.upper())
+                or (bool(filtro_cf) and cf.upper() == filtro_cf.upper()))
+    return False   # voce senza alcun dato di controparte: non verificabile, esclusa
+
+
 def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
                       log=print, control: "Controllo | None" = None,
                       escludi_scartate_pa: bool = True,
-                      estrai_p7m: bool = False) -> tuple[int, int]:
+                      estrai_p7m: bool = False,
+                      filtro_piva: str = "", filtro_cf: str = "",
+                      ruolo_controparte: str = "cliente",
+                      *, voci_out: list | None = None) -> tuple[int, int]:
     """
     Scarica file fattura + metadati per ogni voce restituita da `url_lista`.
 
@@ -232,6 +281,18 @@ def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
     `estrai_p7m` (default False): se il file scaricato è firmato (`.p7m`), estrae l'XML
     e lo salva al posto dell'originale (mai entrambi); se l'estrazione non riesce, salva
     comunque il `.p7m` originale.
+
+    `filtro_piva`/`filtro_cf` (opzionali): se indicati, scarica solo le fatture la cui
+    controparte ha quella P.IVA e/o CF (vedi `_match_controparte`);
+    `ruolo_controparte` ("cliente" per le emesse, "fornitore" per le ricevute) sceglie
+    i campi JSON giusti della voce di lista. Le fatture escluse vengono saltate PRIMA
+    di interrogare l'AdE per i singoli file (nessuna chiamata sprecata).
+
+    `voci_out` (opzionale): lista in cui accumulare le voci di elenco delle fatture
+    EFFETTIVAMENTE scaricate - dopo il filtro per controparte e solo se il file è
+    stato salvato, quindi senza le scartate dalla P.A. e senza quelle fallite. Serve
+    al chiamante per generare il CSV formato AdE (`fec_csv_ade`) senza una seconda
+    chiamata all'elenco e con un contenuto che quadra con i file in cartella.
     """
     log("Richiedo l'elenco fatture all'AdE...")
     try:
@@ -264,7 +325,32 @@ def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
         log("Nessuna fattura trovata nell'intervallo richiesto.")
         return 0, 0
 
-    log(f"Trovate {len(fatture)} fatture nell'intervallo. Avvio download dei file...")
+    if filtro_piva or filtro_cf:
+        n_prima = len(fatture)
+        tutte = fatture
+        fatture = [f for f in fatture
+                   if _match_controparte(f, filtro_piva, filtro_cf, ruolo_controparte)]
+        log(f"Trovate {n_prima} fatture nell'intervallo; {len(fatture)} per la "
+            f"controparte indicata (P.IVA {filtro_piva or '-'} / CF {filtro_cf or '-'}).")
+        if not fatture:
+            # Nessuna corrispondenza: elenco le controparti presenti per capire se
+            # l'identificativo indicato è sbagliato o i campi hanno nomi diversi.
+            controparti = sorted({
+                f"{_campo_ci(f, f'piva{s}') or '-'} / {_campo_ci(f, f'cf{s}') or '-'}"
+                for f in tutte for s in _SUFFISSI_CONTROPARTE[ruolo_controparte]
+                if _campo_ci(f, f"piva{s}") or _campo_ci(f, f"cf{s}")})
+            if controparti:
+                log("Controparti presenti nell'intervallo (P.IVA / CF):")
+                for c in controparti[:30]:
+                    log(f"   • {c}")
+            else:
+                log("⚠️  Nessuna voce di lista espone i campi controparte attesi "
+                    f"({', '.join('piva/cf' + s for s in _SUFFISSI_CONTROPARTE[ruolo_controparte])}): "
+                    "nomi campo da verificare con un dump di discovery.")
+            return 0, 0
+    else:
+        log(f"Trovate {len(fatture)} fatture nell'intervallo. Avvio download dei file...")
+
     n_fatture = n_metadati = 0
     for fattura in fatture:
         if control is not None:
@@ -295,6 +381,12 @@ def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
             log(f"Scarico {fname}  (tot. {n_fatture})")
             with open(os.path.join(dest_dir, fname), "wb") as f:
                 f.write(contenuto)
+            # Voci per il CSV formato AdE (fec_csv_ade): raccolte QUI, cioè solo per
+            # le fatture il cui file è stato davvero salvato. Metterle prima del ciclo
+            # includerebbe anche quelle saltate (scartate dalla P.A., errori sul
+            # singolo file) e il CSV non quadrerebbe con gli XML in cartella.
+            if voci_out is not None:
+                voci_out.append(fattura)
 
         try:
             r3 = _get_con_retry(auth, _file_url(fattura_file, "FILE_METADATI"), log)
@@ -318,16 +410,22 @@ def scarica_emesse(auth: AuthResult, dal: str, al: str, cf_cliente: str,
                    dest_dir: str | None = None, sottocartella: bool = True,
                    log=print, control: "Controllo | None" = None,
                    escludi_scartate_pa: bool = True,
-                   estrai_p7m: bool = False) -> DownloadResult:
+                   estrai_p7m: bool = False,
+                   filtro_piva: str = "", filtro_cf: str = "",
+                   *, voci_out: list | None = None) -> DownloadResult:
     """
     Scarica le fatture EMESSE nell'intervallo [dal, al] (formato ddmmyyyy).
     `auth` deve essere già autenticato (vedi `ade_auth.autentica`).
+    `filtro_piva`/`filtro_cf` (opzionali): limita ai soli Clienti (controparte)
+    con quella P.IVA e/o CF, vedi `_match_controparte`.
     """
     cartella = _cartella(dest_dir, "FattureEmesse", cf_cliente, sottocartella)
     log(f"Scarico fatture emesse per {cf_cliente}  ({dal} -> {al})")
     url = f"{IVASERVIZI}/cons/cons-services/rs/fe/emesse/dal/{dal}/al/{al}?v={unix_time()}"
     n_fatture, n_metadati = _scarica_da_lista(auth, url, cartella, log, control,
-                                              escludi_scartate_pa, estrai_p7m)
+                                              escludi_scartate_pa, estrai_p7m,
+                                              filtro_piva, filtro_cf, "cliente",
+                                              voci_out=voci_out)
     log(f"\nCliente: {cf_cliente}")
     log(f"Fatture scaricate:  {n_fatture}")
     log(f"Metadati scaricati: {n_metadati}")
@@ -340,11 +438,15 @@ def scarica_ricevute(auth: AuthResult, dal: str, al: str, cf_cliente: str,
                      sottocartella: bool = True, log=print,
                      control: "Controllo | None" = None,
                      escludi_scartate_pa: bool = True,
-                     estrai_p7m: bool = False) -> DownloadResult:
+                     estrai_p7m: bool = False,
+                     filtro_piva: str = "", filtro_cf: str = "",
+                   *, voci_out: list | None = None) -> DownloadResult:
     """
     Scarica le fatture RICEVUTE nell'intervallo [dal, al] (formato ddmmyyyy).
     `tipo_data`: 1 = ricerca per data ricezione (default), 2 = per data emissione.
     `auth` deve essere già autenticato (vedi `ade_auth.autentica`).
+    `filtro_piva`/`filtro_cf` (opzionali): limita ai soli Fornitori (controparte)
+    con quella P.IVA e/o CF, vedi `_match_controparte`.
     """
     cartella = _cartella(dest_dir, "FattureRicevute", cf_cliente, sottocartella)
     ricerca = "ricezione" if tipo_data == 1 else "emissione"
@@ -353,7 +455,9 @@ def scarica_ricevute(auth: AuthResult, dal: str, al: str, cf_cliente: str,
     url = (f"{IVASERVIZI}/cons/cons-services/rs/fe/ricevute/dal/{dal}/al/{al}"
            f"/ricerca/{ricerca}?v={unix_time()}")
     n_fatture, n_metadati = _scarica_da_lista(auth, url, cartella, log, control,
-                                              escludi_scartate_pa, estrai_p7m)
+                                              escludi_scartate_pa, estrai_p7m,
+                                              filtro_piva, filtro_cf, "fornitore",
+                                              voci_out=voci_out)
     log(f"\nCliente: {cf_cliente}")
     log(f"Fatture ricevute scaricate:  {n_fatture}")
     log(f"Metadati scaricati: {n_metadati}")
@@ -367,13 +471,18 @@ def scarica_transfrontaliere_emesse(auth: AuthResult, dal: str, al: str,
                                     log=print,
                                     control: "Controllo | None" = None,
                                     escludi_scartate_pa: bool = True,
-                                    estrai_p7m: bool = False) -> DownloadResult:
-    """Fatture transfrontaliere EMESSE nell'intervallo [dal, al] (ddmmyyyy)."""
+                                    estrai_p7m: bool = False,
+                                    filtro_piva: str = "", filtro_cf: str = "",
+                   *, voci_out: list | None = None) -> DownloadResult:
+    """Fatture transfrontaliere EMESSE nell'intervallo [dal, al] (ddmmyyyy).
+    `filtro_piva`/`filtro_cf` (opzionali): come in `scarica_emesse`."""
     cartella = _cartella(dest_dir, "FattureEmesseTRAN", cf_cliente, sottocartella)
     log(f"Scarico fatture transfrontaliere emesse per {cf_cliente}  ({dal} -> {al})")
     url = f"{IVASERVIZI}/cons/cons-services/rs/ft/emesse/dal/{dal}/al/{al}?v={unix_time()}"
     n_fatture, n_metadati = _scarica_da_lista(auth, url, cartella, log, control,
-                                              escludi_scartate_pa, estrai_p7m)
+                                              escludi_scartate_pa, estrai_p7m,
+                                              filtro_piva, filtro_cf, "cliente",
+                                              voci_out=voci_out)
     log(f"\nCliente: {cf_cliente}")
     log(f"Transfrontaliere emesse scaricate: {n_fatture}")
     log(f"Metadati scaricati: {n_metadati}")
@@ -387,13 +496,18 @@ def scarica_transfrontaliere_ricevute(auth: AuthResult, dal: str, al: str,
                                       log=print,
                                       control: "Controllo | None" = None,
                                       escludi_scartate_pa: bool = True,
-                                      estrai_p7m: bool = False) -> DownloadResult:
-    """Fatture transfrontaliere RICEVUTE nell'intervallo [dal, al] (ddmmyyyy)."""
+                                      estrai_p7m: bool = False,
+                                      filtro_piva: str = "", filtro_cf: str = "",
+                   *, voci_out: list | None = None) -> DownloadResult:
+    """Fatture transfrontaliere RICEVUTE nell'intervallo [dal, al] (ddmmyyyy).
+    `filtro_piva`/`filtro_cf` (opzionali): come in `scarica_ricevute`."""
     cartella = _cartella(dest_dir, "FattureRicevuteTRAN", cf_cliente, sottocartella)
     log(f"Scarico fatture transfrontaliere ricevute per {cf_cliente}  ({dal} -> {al})")
     url = f"{IVASERVIZI}/cons/cons-services/rs/ft/ricevute/dal/{dal}/al/{al}?v={unix_time()}"
     n_fatture, n_metadati = _scarica_da_lista(auth, url, cartella, log, control,
-                                              escludi_scartate_pa, estrai_p7m)
+                                              escludi_scartate_pa, estrai_p7m,
+                                              filtro_piva, filtro_cf, "fornitore",
+                                              voci_out=voci_out)
     log(f"\nCliente: {cf_cliente}")
     log(f"Transfrontaliere ricevute scaricate: {n_fatture}")
     log(f"Metadati scaricati: {n_metadati}")
@@ -407,13 +521,15 @@ def scarica_messe_a_disposizione(auth: AuthResult, dal: str, al: str,
                                  log=print,
                                  control: "Controllo | None" = None,
                                  escludi_scartate_pa: bool = True,
-                                 estrai_p7m: bool = False) -> DownloadResult:
+                                 estrai_p7m: bool = False,
+                                 *, voci_out: list | None = None) -> DownloadResult:
     """Fatture ricevute "messe a disposizione" nell'intervallo [dal, al] (ddmmyyyy)."""
     cartella = _cartella(dest_dir, "FattureRicevuteDisposizione", cf_cliente, sottocartella)
     log(f"Scarico fatture messe a disposizione per {cf_cliente}  ({dal} -> {al})")
     url = f"{IVASERVIZI}/cons/cons-services/rs/fe/mc/dal/{dal}/al/{al}?v={unix_time()}"
     n_fatture, n_metadati = _scarica_da_lista(auth, url, cartella, log, control,
-                                              escludi_scartate_pa, estrai_p7m)
+                                              escludi_scartate_pa, estrai_p7m,
+                                              voci_out=voci_out)
     log(f"\nCliente: {cf_cliente}")
     log(f"Fatture messe a disposizione scaricate: {n_fatture}")
     log(f"Metadati scaricati: {n_metadati}")

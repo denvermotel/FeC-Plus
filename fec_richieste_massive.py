@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# FeC-Plus - v0.03 alpha
+# FeC-Plus - v0.04 dev
 """
 fec_richieste_massive.py - Anagrafica locale delle «Richieste Massive» inviate.
 
@@ -21,7 +21,7 @@ da Tk o dalla rete.
 
 from __future__ import annotations
 
-__version__ = "0.03 alpha"
+__version__ = "0.04 dev"
 
 import json
 import os
