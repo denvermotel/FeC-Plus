@@ -164,8 +164,13 @@ class ModelloNastro:
 
     def _indice_corrente(self) -> tuple[int, int] | None:
         """(indice segmento, indice tacca) della posizione in lavorazione, cioe'
-        la prima non ancora riempita dell'ultimo segmento incompleto. `None` se
-        non c'e' nulla in lavorazione (tutto fatto, o nessun totale noto)."""
+        la prima non ancora riempita dell'ULTIMO segmento con totale noto.
+
+        Se quel segmento e' gia' completo la ricerca si ferma li' e torna None:
+        non si va a cercare piu' indietro. Un segmento precedente rimasto
+        incompleto e' lavoro abbandonato, non lavoro in corso - dipingerlo di
+        blu su un resoconto concluso direbbe il falso.
+        """
         for i in range(len(self.segmenti) - 1, -1, -1):
             seg = self.segmenti[i]
             if seg.totale is None:

@@ -178,6 +178,23 @@ class TestRettangoli(unittest.TestCase):
         for r in m.rettangoli(120, 10):
             self.assertGreaterEqual(r.larghezza, 1)
 
+    def test_segmento_precedente_incompleto_non_e_corrente(self):
+        # Il primo segmento resta incompleto (lavoro abbandonato), il secondo
+        # si chiude. A quel punto non c'e' piu' nulla «in lavorazione»: una
+        # tacca blu su un resoconto concluso direbbe il falso.
+        m = fec_nastro.ModelloNastro()
+        m.nuovo_segmento("uno")
+        m.imposta_totale(3)
+        m.aggiungi_esito(ESITO_OK)
+        m.nuovo_segmento("due")
+        m.imposta_totale(2)
+        m.aggiungi_esito(ESITO_OK)
+        m.aggiungi_esito(ESITO_OK)
+        colori = [r.colore for r in m.rettangoli(500, 10)]
+        self.assertNotIn(fec_nastro.COL_CORRENTE, colori)
+        # Le due posizioni mai lavorate del primo segmento restano «da fare».
+        self.assertEqual(colori.count(fec_nastro.COL_DA_FARE), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
