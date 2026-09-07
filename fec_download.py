@@ -109,6 +109,50 @@ class Controllo:
             raise DownloadAnnullato("Download interrotto dall'utente.")
 
 
+# Esiti di un singolo documento, usati da `Progresso.esito`. Costanti e non
+# stringhe libere: chi le passa a mano prima o poi scrive "errori" al plurale.
+ESITO_OK      = "ok"
+ESITO_SALTATO = "saltato"
+ESITO_ERRORE  = "errore"
+
+
+class Progresso:
+    """
+    Osservatore dell'avanzamento di un'operazione lunga.
+
+    Gemello di `Controllo`: viaggia sullo stesso percorso, con la stessa
+    opzionalità (`progresso: Progresso | None = None`), ma OSSERVA invece di
+    comandare. I due restano separati apposta: chi vuole solo poter interrompere
+    un download non deve implementare nulla di grafico.
+
+    Tutti i metodi di questa classe base non fanno nulla. La libreria chiama
+    sempre; chi non guarda non paga. La GUI ne registra una sottoclasse (vedi
+    `fec_gui.ProgressoGUI`), la CLI potrà registrarne una testuale senza che
+    questo modulo debba saperlo.
+
+    ATTENZIONE ai chiamanti: i metodi vengono invocati dal worker thread. Chi
+    implementa una sottoclasse che tocca una GUI deve marshallare da sé.
+    """
+
+    def fase(self, etichetta: str, indice: int, totale_fasi: int) -> None:
+        """Inizia una nuova fase (un blocco di periodo, un cliente, ...).
+        `indice`/`totale_fasi` sono LOCALI al chiamante: comporre gli offset
+        di un task con più richieste spetta a chi implementa."""
+
+    def totale(self, n: int) -> None:
+        """Numero di documenti della fase corrente, noto solo quando l'elenco
+        è arrivato. `n = 0` è legittimo (nessun documento nel periodo)."""
+
+    def esito(self, tipo: str) -> None:
+        """Esito di UN documento: `ESITO_OK`, `ESITO_SALTATO` o `ESITO_ERRORE`."""
+
+    def messaggio(self, testo: str) -> None:
+        """Riga di stato libera, per le fasi senza conteggio."""
+
+    def conclusa(self, annullato: bool = False) -> None:
+        """L'operazione è finita, per bene o perché interrotta dall'utente."""
+
+
 @dataclass
 class DownloadResult:
     """Esito di uno scarico: quante fatture/metadati e in quale cartella."""
