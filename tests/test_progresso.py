@@ -8,6 +8,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -167,6 +168,64 @@ class TestEventiScaricaDaLista(unittest.TestCase):
             auth, "http://x/lista", self.tmp, log=lambda *_: None,
             escludi_scartate_pa=False)
         self.assertEqual(n_fatture, 1)
+
+
+class TestFasiEseguiRichiesta(unittest.TestCase):
+    """`esegui_richiesta` annuncia una fase per blocco di periodo."""
+
+    def setUp(self):
+        import fec_queue
+        self.fq = fec_queue
+
+    def _finta(self, registro):
+        def _scarica(auth, dal, al, **kw):
+            registro.append((dal, al, kw.get("progresso")))
+            return fec_download.DownloadResult("CF", "/tmp", 0, 0)
+        return _scarica
+
+    def test_una_fase_per_blocco(self):
+        registro = []
+        spia = ProgressoSpia()
+        spec = self.fq._Spec(self._finta(registro), "%d%m%Y", "download")
+        with unittest.mock.patch.dict(self.fq.TIPI, {"finto": spec}):
+            self.fq.esegui_richiesta(None, "finto", dal="01012026", al="31082026",
+                                     cf_cliente="CF", log=lambda *_: None,
+                                     progresso=spia)
+        fasi = spia.solo("fase")
+        self.assertEqual(len(fasi), 3)            # 8 mesi -> 3 blocchi da 3
+        self.assertEqual(fasi[0][2], 1)           # indice
+        self.assertEqual(fasi[0][3], 3)           # totale blocchi
+        self.assertIn("blocco 1/3", fasi[0][1])
+
+    def test_blocco_unico_senza_suffisso(self):
+        registro = []
+        spia = ProgressoSpia()
+        spec = self.fq._Spec(self._finta(registro), "%d%m%Y", "download")
+        with unittest.mock.patch.dict(self.fq.TIPI, {"finto": spec}):
+            self.fq.esegui_richiesta(None, "finto", dal="01012026", al="31012026",
+                                     cf_cliente="CF", log=lambda *_: None,
+                                     progresso=spia)
+        fasi = spia.solo("fase")
+        self.assertEqual(len(fasi), 1)
+        self.assertNotIn("blocco", fasi[0][1])
+
+    def test_il_progresso_arriva_alla_funzione_di_download(self):
+        registro = []
+        spia = ProgressoSpia()
+        spec = self.fq._Spec(self._finta(registro), "%d%m%Y", "download")
+        with unittest.mock.patch.dict(self.fq.TIPI, {"finto": spec}):
+            self.fq.esegui_richiesta(None, "finto", dal="01012026", al="31012026",
+                                     cf_cliente="CF", log=lambda *_: None,
+                                     progresso=spia)
+        self.assertIs(registro[0][2], spia)
+
+    def test_senza_progresso_non_lo_inoltra(self):
+        registro = []
+        spec = self.fq._Spec(self._finta(registro), "%d%m%Y", "download")
+        with unittest.mock.patch.dict(self.fq.TIPI, {"finto": spec}):
+            self.fq.esegui_richiesta(None, "finto", dal="01012026", al="31012026",
+                                     cf_cliente="CF", log=lambda *_: None)
+        self.assertIsNone(registro[0][2])
 
 
 if __name__ == "__main__":

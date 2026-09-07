@@ -100,6 +100,20 @@ class _Spec:
     kind: str          # "download" (DownloadResult) | "invio" (codice) | "diretto" (bolli)
 
 
+# Nomi leggibili dei tipi, per la riga di stato della barra di avanzamento.
+# Il log ha i suoi messaggi; questi stanno in una fascia larga poche parole.
+ETICHETTE: dict[str, str] = {
+    "emesse": "Emesse", "ricevute": "Ricevute",
+    "trans_emesse": "Transfrontaliere emesse",
+    "trans_ricevute": "Transfrontaliere ricevute",
+    "messe_disposizione": "Messe a disposizione",
+    "massive_emesse": "Massiva emesse",
+    "massive_ricevute_emissione": "Massiva ricevute (emissione)",
+    "massive_ricevute_ricezione": "Massiva ricevute (ricezione)",
+    "massive_disposizione": "Massiva messe a disposizione",
+    "corrispettivi": "Corrispettivi", "bolli": "Bolli virtuali",
+}
+
 # Chiavi canoniche usate da GUI e CLI per identificare la richiesta.
 TIPI: dict[str, _Spec] = {
     "emesse":                     _Spec(fd.scarica_emesse,                     "%d%m%Y", "download"),
@@ -128,7 +142,8 @@ def _somma_download(risultati: list[DownloadResult]) -> DownloadResult:
 
 
 def esegui_richiesta(auth, tipo: str, *, dal: str | None = None, al: str | None = None,
-                     max_mesi: int = MAX_MESI_BLOCCO, control=None, log=print, **kwargs):
+                     max_mesi: int = MAX_MESI_BLOCCO, control=None, log=print,
+                     progresso=None, **kwargs):
     """
     Esegue la richiesta `tipo` (chiave di TIPI) sull'AuthResult `auth` già autenticato,
     spezzando automaticamente l'intervallo [dal, al] in blocchi <= max_mesi e
@@ -137,6 +152,11 @@ def esegui_richiesta(auth, tipo: str, *, dal: str | None = None, al: str | None 
 
     `control` (opzionale, `fec_download.Controllo`): pausa/annullamento cooperativo,
     controllato tra un blocco e l'altro e passato ai download per il controllo tra i file.
+
+    `progresso` (opzionale, `fec_download.Progresso`): riceve una `fase()` per
+    blocco di periodo e viene inoltrato ai download, che vi emettono totale ed
+    esiti. Gli indici di fase sono LOCALI a questa chiamata: comporre gli offset
+    di un task con piu' richieste spetta al chiamante (vedi `fec_gui`).
 
     `csv_ade` (solo tipi "download"): oltre ai file scaricati genera nella stessa
     cartella il CSV formato AdE dell'elenco (`fec_csv_ade`), UNO per l'intera
@@ -174,12 +194,20 @@ def esegui_richiesta(auth, tipo: str, *, dal: str | None = None, al: str | None 
     for i, (d, a) in enumerate(blocchi, 1):
         if control is not None:
             control.check()   # pausa/annullamento cooperativo tra un blocco e l'altro
+        if progresso is not None:
+            nome = ETICHETTE.get(tipo, tipo)
+            etichetta = f"{nome} · blocco {i}/{len(blocchi)}" if multi else nome
+            progresso.fase(etichetta, i, len(blocchi))
         if multi:
             log(f"\n- Blocco {i}/{len(blocchi)}: {d} → {a}")
         extra = dict(kwargs)
         if spec.kind == "download":
             # I download passano il control all'engine (controllo tra i file).
             extra["control"] = control
+            if progresso is not None:
+                # Non passare la chiave quando assente: retrocompatibilità con
+                # chi implementa TIPI senza **kwargs (es. test_queue_csv_ade.py).
+                extra["progresso"] = progresso
             if csv_ade:
                 extra["voci_out"] = voci_csv
         elif spec.kind == "invio" and multi:
