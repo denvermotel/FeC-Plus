@@ -90,5 +90,94 @@ class TestRiepilogo(unittest.TestCase):
         self.assertEqual(m.riepilogo().ok, 1)
 
 
+class TestRettangoli(unittest.TestCase):
+
+    def _modello(self, totale, esiti):
+        m = fec_nastro.ModelloNastro()
+        m.nuovo_segmento("Emesse")
+        m.imposta_totale(totale)
+        for e in esiti:
+            m.aggiungi_esito(e)
+        return m
+
+    def test_modello_vuoto_non_disegna_nulla(self):
+        self.assertEqual(fec_nastro.ModelloNastro().rettangoli(100, 10), [])
+
+    def test_totale_zero_non_disegna_nulla(self):
+        m = self._modello(0, [])
+        self.assertEqual(m.rettangoli(100, 10), [])
+
+    def test_una_tacca_per_documento_sotto_il_massimo(self):
+        m = self._modello(4, [ESITO_OK, ESITO_OK])
+        self.assertEqual(len(m.rettangoli(400, 10)), 4)
+
+    def test_colori_per_esito(self):
+        m = self._modello(3, [ESITO_OK, ESITO_SALTATO, ESITO_ERRORE])
+        colori = [r.colore for r in m.rettangoli(300, 10)]
+        self.assertEqual(colori, [fec_nastro.COL_OK,
+                                  fec_nastro.COL_SALTATO,
+                                  fec_nastro.COL_ERRORE])
+
+    def test_la_tacca_corrente_e_quella_dopo_l_ultimo_esito(self):
+        m = self._modello(4, [ESITO_OK, ESITO_OK])
+        r = m.rettangoli(400, 10)
+        self.assertEqual(r[2].colore, fec_nastro.COL_CORRENTE)
+        self.assertEqual(r[3].colore, fec_nastro.COL_DA_FARE)
+
+    def test_errore_e_corrente_a_tutta_altezza(self):
+        m = self._modello(3, [ESITO_OK, ESITO_ERRORE])
+        r = m.rettangoli(300, 10)
+        self.assertEqual(r[0].altezza, 5)     # normale: meta'
+        self.assertEqual(r[0].y, 5)           # allineata in basso
+        self.assertEqual(r[1].altezza, 10)    # errore: piena
+        self.assertEqual(r[1].y, 0)
+        self.assertEqual(r[2].altezza, 10)    # corrente: piena
+
+    def test_segmento_completo_non_ha_tacca_corrente(self):
+        m = self._modello(2, [ESITO_OK, ESITO_OK])
+        colori = [r.colore for r in m.rettangoli(200, 10)]
+        self.assertNotIn(fec_nastro.COL_CORRENTE, colori)
+
+    def test_aggregazione_oltre_il_massimo(self):
+        m = self._modello(fec_nastro.MAX_TACCHE * 2, [ESITO_OK])
+        r = m.rettangoli(600, 10)
+        self.assertEqual(len(r), fec_nastro.MAX_TACCHE)
+
+    def test_nel_blocco_aggregato_vince_l_esito_peggiore(self):
+        # fattore 2: il primo blocco contiene un ok e un errore -> rosso.
+        m = self._modello(fec_nastro.MAX_TACCHE * 2,
+                          [ESITO_OK, ESITO_ERRORE, ESITO_OK, ESITO_SALTATO])
+        r = m.rettangoli(600, 10)
+        self.assertEqual(r[0].colore, fec_nastro.COL_ERRORE)
+        self.assertEqual(r[1].colore, fec_nastro.COL_SALTATO)
+
+    def test_due_segmenti_hanno_un_gap_in_mezzo(self):
+        m = fec_nastro.ModelloNastro()
+        m.nuovo_segmento("uno")
+        m.imposta_totale(2)
+        m.aggiungi_esito(ESITO_OK)
+        m.aggiungi_esito(ESITO_OK)
+        m.nuovo_segmento("due")
+        m.imposta_totale(2)
+        m.aggiungi_esito(ESITO_OK)
+        m.aggiungi_esito(ESITO_OK)
+        r = m.rettangoli(402, 10)
+        self.assertEqual(len(r), 4)
+        fine_primo = r[1].x + r[1].larghezza
+        self.assertGreaterEqual(r[2].x - fine_primo, fec_nastro.GAP_SEGMENTO)
+
+    def test_i_rettangoli_stanno_dentro_la_larghezza(self):
+        m = self._modello(37, [ESITO_OK] * 10)
+        for r in m.rettangoli(250, 10):
+            self.assertGreaterEqual(r.x, 0)
+            self.assertLessEqual(r.x + r.larghezza, 250)
+
+    def test_ogni_tacca_e_larga_almeno_un_pixel(self):
+        # Nastro stretto e molti documenti: nessun rettangolo invisibile.
+        m = self._modello(200, [ESITO_OK] * 50)
+        for r in m.rettangoli(120, 10):
+            self.assertGreaterEqual(r.larghezza, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

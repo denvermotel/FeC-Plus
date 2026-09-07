@@ -45,6 +45,22 @@ MAX_TACCHE = 300
 # Quando due esiti finiscono nella stessa tacca, vince il piu' grave.
 GRAVITA = {ESITO_OK: 1, ESITO_SALTATO: 2, ESITO_ERRORE: 3}
 
+# Palette del nastro. Fondo chiaro, coerente col tema ttk della finestra (la
+# console scura resta un'altra cosa).
+COL_DA_FARE  = "#d0d0d0"
+COL_OK       = "#2e7d32"
+COL_SALTATO  = "#f9a825"
+COL_ERRORE   = "#c62828"
+COL_CORRENTE = "#1565c0"
+COL_FONDO    = "#f0f0f0"
+
+# Spazio vuoto fra un segmento (fase) e il successivo.
+GAP_SEGMENTO = 2
+
+# Le tacche in errore e quella in lavorazione salgono a tutta altezza: e' il
+# dettaglio che fa saltare all'occhio DOVE e' andato storto qualcosa.
+_ALTEZZA_PIENA = (COL_ERRORE, COL_CORRENTE)
+
 
 @dataclass
 class Segmento:
@@ -66,6 +82,28 @@ class Riepilogo:
     errori: int
     fatti: int
     totale: int | None
+
+
+@dataclass(frozen=True)
+class Rettangolo:
+    """Un rettangolo da disegnare, in pixel. Il modello non sa cosa sia un
+    Canvas: produce numeri, il widget li usa."""
+    x: int
+    larghezza: int
+    y: int
+    altezza: int
+    colore: str
+
+
+def _aggrega(esiti: list[str], fattore: int, n_blocchi: int) -> list[str | None]:
+    """Riduce gli esiti a UN esito per blocco: quando piu' documenti condividono
+    un blocco vince il piu' grave. I blocchi non ancora elaborati restano None."""
+    peggiore: list[str | None] = [None] * n_blocchi
+    for i, e in enumerate(esiti):
+        b = min(i // fattore, n_blocchi - 1)
+        if peggiore[b] is None or GRAVITA[e] > GRAVITA[peggiore[b]]:
+            peggiore[b] = e
+    return peggiore
 
 
 class ModelloNastro:
@@ -112,3 +150,85 @@ class ModelloNastro:
                 totale = (totale or 0) + seg.totale
         return Riepilogo(ok=ok, saltati=saltati, errori=errori,
                          fatti=fatti, totale=totale)
+
+    # ── Geometria ─────────────────────────────────────────────────────────
+
+    def _fattore(self) -> int:
+        """Quanti documenti condividono una tacca. 1 finche' si sta sotto
+        `MAX_TACCHE`; poi si aggrega, perche' tacche piu' sottili di un pixel
+        non le vedrebbe nessuno."""
+        totali = sum(seg.tacche() for seg in self.segmenti)
+        if totali <= MAX_TACCHE:
+            return 1
+        return math.ceil(totali / MAX_TACCHE)
+
+    def _indice_corrente(self) -> tuple[int, int] | None:
+        """(indice segmento, indice tacca) della posizione in lavorazione, cioe'
+        la prima non ancora riempita dell'ultimo segmento incompleto. `None` se
+        non c'e' nulla in lavorazione (tutto fatto, o nessun totale noto)."""
+        for i in range(len(self.segmenti) - 1, -1, -1):
+            seg = self.segmenti[i]
+            if seg.totale is None:
+                continue
+            if len(seg.esiti) < seg.totale:
+                return (i, len(seg.esiti))
+            return None
+        return None
+
+    def rettangoli(self, larghezza_px: int, altezza_px: int) -> list[Rettangolo]:
+        """Traduce lo stato in rettangoli da disegnare su una superficie
+        `larghezza_px` x `altezza_px`. Nessuno stato viene modificato: si puo'
+        chiamare a ogni resize senza conseguenze."""
+        fattore = self._fattore()
+        blocchi_per_segmento = [math.ceil(seg.tacche() / fattore) if seg.tacche() else 0
+                                for seg in self.segmenti]
+        blocchi_totali = sum(blocchi_per_segmento)
+        if blocchi_totali <= 0 or larghezza_px <= 0:
+            return []
+
+        # I gap fra segmenti si tolgono prima di spartire lo spazio; se il
+        # nastro e' cosi' stretto da non lasciare spazio alle tacche, i gap
+        # saltano (meglio senza separatori che senza tacche).
+        gap = GAP_SEGMENTO
+        n_gap = max(0, sum(1 for b in blocchi_per_segmento if b) - 1)
+        if larghezza_px - n_gap * gap < blocchi_totali:
+            gap = 0
+        utile = max(blocchi_totali, larghezza_px - n_gap * gap)
+        passo = utile / blocchi_totali
+
+        corrente = self._indice_corrente()
+        meta = max(1, altezza_px // 2)
+
+        out: list[Rettangolo] = []
+        x = 0.0
+        visti = 0
+        for i, seg in enumerate(self.segmenti):
+            n_blocchi = blocchi_per_segmento[i]
+            if not n_blocchi:
+                continue
+            if visti:                                  # gap prima di ogni
+                x += gap                               # segmento tranne il primo
+            peggiore = _aggrega(seg.esiti, fattore, n_blocchi)
+            blocco_corrente = (corrente[1] // fattore) if (corrente and corrente[0] == i) else -1
+            for b in range(n_blocchi):
+                esito = peggiore[b]
+                if esito is not None:
+                    colore = {ESITO_OK: COL_OK,
+                              ESITO_SALTATO: COL_SALTATO,
+                              ESITO_ERRORE: COL_ERRORE}[esito]
+                elif b == blocco_corrente:
+                    colore = COL_CORRENTE
+                else:
+                    colore = COL_DA_FARE
+                x0 = int(round(x + b * passo))
+                x1 = int(round(x + (b + 1) * passo))
+                pieno = colore in _ALTEZZA_PIENA
+                out.append(Rettangolo(
+                    x=x0,
+                    larghezza=max(1, x1 - x0),
+                    y=0 if pieno else altezza_px - meta,
+                    altezza=altezza_px if pieno else meta,
+                    colore=colore))
+            x += n_blocchi * passo
+            visti += n_blocchi
+        return out
