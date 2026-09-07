@@ -309,7 +309,8 @@ def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
                       estrai_p7m: bool = False,
                       filtro_piva: str = "", filtro_cf: str = "",
                       ruolo_controparte: str = "cliente",
-                      *, voci_out: list | None = None) -> tuple[int, int]:
+                      *, voci_out: list | None = None,
+                      progresso: "Progresso | None" = None) -> tuple[int, int]:
     """
     Scarica file fattura + metadati per ogni voce restituita da `url_lista`.
 
@@ -337,8 +338,15 @@ def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
     stato salvato, quindi senza le scartate dalla P.A. e senza quelle fallite. Serve
     al chiamante per generare il CSV formato AdE (`fec_csv_ade`) senza una seconda
     chiamata all'elenco e con un contenuto che quadra con i file in cartella.
+
+    `progresso` (opzionale): osservatore dell'avanzamento (vedi `Progresso`).
+    Riceve `messaggio` prima della richiesta di elenco, `totale` con il numero di
+    fatture DOPO l'eventuale filtro controparte, e un `esito` per ogni fattura.
+    Con `None` (default) non viene emesso nulla e il comportamento e' identico.
     """
     log("Richiedo l'elenco fatture all'AdE...")
+    if progresso is not None:
+        progresso.messaggio("Richiedo l'elenco all'AdE…")
     try:
         r = auth.session.get(url_lista, headers=auth.headers, verify=False, timeout=HTTP_TIMEOUT)
     except requests.exceptions.RequestException as exc:
@@ -367,6 +375,8 @@ def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
         )
     if not fatture:
         log("Nessuna fattura trovata nell'intervallo richiesto.")
+        if progresso is not None:
+            progresso.totale(0)
         return 0, 0
 
     if filtro_piva or filtro_cf:
@@ -391,9 +401,16 @@ def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
                 log("⚠️  Nessuna voce di lista espone i campi controparte attesi "
                     f"({', '.join('piva/cf' + s for s in _SUFFISSI_CONTROPARTE[ruolo_controparte])}): "
                     "nomi campo da verificare con un dump di discovery.")
+            if progresso is not None:
+                progresso.totale(0)
             return 0, 0
     else:
         log(f"Trovate {len(fatture)} fatture nell'intervallo. Avvio download dei file...")
+
+    # Le tacche del nastro sono le fatture che verranno DAVVERO tentate: il
+    # totale si annuncia dopo il filtro, non prima.
+    if progresso is not None:
+        progresso.totale(len(fatture))
 
     n_fatture = n_metadati = 0
     for fattura in fatture:
@@ -403,12 +420,16 @@ def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
 
         if escludi_scartate_pa and _e_scartata_pa(auth, fattura_file, log):
             log(f"   ⏭️  Fattura {fattura_file} rifiutata dalla P.A.: saltata.")
+            if progresso is not None:
+                progresso.esito(ESITO_SALTATO)
             continue
 
         try:
             r2 = _get_con_retry(auth, _file_url(fattura_file, "FILE_FATTURA"), log)
         except DownloadError as exc:
             log(f"   ❌ Fattura {fattura_file} saltata: {exc}")
+            if progresso is not None:
+                progresso.esito(ESITO_ERRORE)
             continue
         fmetadato = None
         if r2.status_code == 200:
@@ -431,10 +452,22 @@ def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
             # singolo file) e il CSV non quadrerebbe con gli XML in cartella.
             if voci_out is not None:
                 voci_out.append(fattura)
+            if progresso is not None:
+                progresso.esito(ESITO_OK)
+        else:
+            # `_get_con_retry` solleva solo sugli errori di connessione: un
+            # 4xx/5xx arriva fin qui come Response. Senza questo ramo la
+            # fattura non avrebbe alcuna tacca e il nastro non si chiuderebbe mai.
+            log(f"   ❌ Fattura {fattura_file} non scaricata (HTTP {r2.status_code}).")
+            if progresso is not None:
+                progresso.esito(ESITO_ERRORE)
+            continue
 
         try:
             r3 = _get_con_retry(auth, _file_url(fattura_file, "FILE_METADATI"), log)
         except DownloadError as exc:
+            # Nessun esito sul nastro: la fattura e' gia' stata contata sopra,
+            # una tacca vale un documento, non un file.
             log(f"   ❌ Metadato {fattura_file} saltato: {exc}")
             continue
         if r3.status_code == 200 and fmetadato:
@@ -456,7 +489,8 @@ def scarica_emesse(auth: AuthResult, dal: str, al: str, cf_cliente: str,
                    escludi_scartate_pa: bool = True,
                    estrai_p7m: bool = False,
                    filtro_piva: str = "", filtro_cf: str = "",
-                   *, voci_out: list | None = None) -> DownloadResult:
+                   *, voci_out: list | None = None,
+                   progresso: "Progresso | None" = None) -> DownloadResult:
     """
     Scarica le fatture EMESSE nell'intervallo [dal, al] (formato ddmmyyyy).
     `auth` deve essere già autenticato (vedi `ade_auth.autentica`).
@@ -469,7 +503,7 @@ def scarica_emesse(auth: AuthResult, dal: str, al: str, cf_cliente: str,
     n_fatture, n_metadati = _scarica_da_lista(auth, url, cartella, log, control,
                                               escludi_scartate_pa, estrai_p7m,
                                               filtro_piva, filtro_cf, "cliente",
-                                              voci_out=voci_out)
+                                              voci_out=voci_out, progresso=progresso)
     log(f"\nCliente: {cf_cliente}")
     log(f"Fatture scaricate:  {n_fatture}")
     log(f"Metadati scaricati: {n_metadati}")
@@ -484,7 +518,8 @@ def scarica_ricevute(auth: AuthResult, dal: str, al: str, cf_cliente: str,
                      escludi_scartate_pa: bool = True,
                      estrai_p7m: bool = False,
                      filtro_piva: str = "", filtro_cf: str = "",
-                   *, voci_out: list | None = None) -> DownloadResult:
+                   *, voci_out: list | None = None,
+                   progresso: "Progresso | None" = None) -> DownloadResult:
     """
     Scarica le fatture RICEVUTE nell'intervallo [dal, al] (formato ddmmyyyy).
     `tipo_data`: 1 = ricerca per data ricezione (default), 2 = per data emissione.
@@ -501,7 +536,7 @@ def scarica_ricevute(auth: AuthResult, dal: str, al: str, cf_cliente: str,
     n_fatture, n_metadati = _scarica_da_lista(auth, url, cartella, log, control,
                                               escludi_scartate_pa, estrai_p7m,
                                               filtro_piva, filtro_cf, "fornitore",
-                                              voci_out=voci_out)
+                                              voci_out=voci_out, progresso=progresso)
     log(f"\nCliente: {cf_cliente}")
     log(f"Fatture ricevute scaricate:  {n_fatture}")
     log(f"Metadati scaricati: {n_metadati}")
@@ -517,7 +552,8 @@ def scarica_transfrontaliere_emesse(auth: AuthResult, dal: str, al: str,
                                     escludi_scartate_pa: bool = True,
                                     estrai_p7m: bool = False,
                                     filtro_piva: str = "", filtro_cf: str = "",
-                   *, voci_out: list | None = None) -> DownloadResult:
+                   *, voci_out: list | None = None,
+                   progresso: "Progresso | None" = None) -> DownloadResult:
     """Fatture transfrontaliere EMESSE nell'intervallo [dal, al] (ddmmyyyy).
     `filtro_piva`/`filtro_cf` (opzionali): come in `scarica_emesse`."""
     cartella = _cartella(dest_dir, "FattureEmesseTRAN", cf_cliente, sottocartella)
@@ -526,7 +562,7 @@ def scarica_transfrontaliere_emesse(auth: AuthResult, dal: str, al: str,
     n_fatture, n_metadati = _scarica_da_lista(auth, url, cartella, log, control,
                                               escludi_scartate_pa, estrai_p7m,
                                               filtro_piva, filtro_cf, "cliente",
-                                              voci_out=voci_out)
+                                              voci_out=voci_out, progresso=progresso)
     log(f"\nCliente: {cf_cliente}")
     log(f"Transfrontaliere emesse scaricate: {n_fatture}")
     log(f"Metadati scaricati: {n_metadati}")
@@ -542,7 +578,8 @@ def scarica_transfrontaliere_ricevute(auth: AuthResult, dal: str, al: str,
                                       escludi_scartate_pa: bool = True,
                                       estrai_p7m: bool = False,
                                       filtro_piva: str = "", filtro_cf: str = "",
-                   *, voci_out: list | None = None) -> DownloadResult:
+                   *, voci_out: list | None = None,
+                   progresso: "Progresso | None" = None) -> DownloadResult:
     """Fatture transfrontaliere RICEVUTE nell'intervallo [dal, al] (ddmmyyyy).
     `filtro_piva`/`filtro_cf` (opzionali): come in `scarica_ricevute`."""
     cartella = _cartella(dest_dir, "FattureRicevuteTRAN", cf_cliente, sottocartella)
@@ -551,7 +588,7 @@ def scarica_transfrontaliere_ricevute(auth: AuthResult, dal: str, al: str,
     n_fatture, n_metadati = _scarica_da_lista(auth, url, cartella, log, control,
                                               escludi_scartate_pa, estrai_p7m,
                                               filtro_piva, filtro_cf, "fornitore",
-                                              voci_out=voci_out)
+                                              voci_out=voci_out, progresso=progresso)
     log(f"\nCliente: {cf_cliente}")
     log(f"Transfrontaliere ricevute scaricate: {n_fatture}")
     log(f"Metadati scaricati: {n_metadati}")
@@ -566,14 +603,15 @@ def scarica_messe_a_disposizione(auth: AuthResult, dal: str, al: str,
                                  control: "Controllo | None" = None,
                                  escludi_scartate_pa: bool = True,
                                  estrai_p7m: bool = False,
-                                 *, voci_out: list | None = None) -> DownloadResult:
+                                 *, voci_out: list | None = None,
+                                 progresso: "Progresso | None" = None) -> DownloadResult:
     """Fatture ricevute "messe a disposizione" nell'intervallo [dal, al] (ddmmyyyy)."""
     cartella = _cartella(dest_dir, "FattureRicevuteDisposizione", cf_cliente, sottocartella)
     log(f"Scarico fatture messe a disposizione per {cf_cliente}  ({dal} -> {al})")
     url = f"{IVASERVIZI}/cons/cons-services/rs/fe/mc/dal/{dal}/al/{al}?v={unix_time()}"
     n_fatture, n_metadati = _scarica_da_lista(auth, url, cartella, log, control,
                                               escludi_scartate_pa, estrai_p7m,
-                                              voci_out=voci_out)
+                                              voci_out=voci_out, progresso=progresso)
     log(f"\nCliente: {cf_cliente}")
     log(f"Fatture messe a disposizione scaricate: {n_fatture}")
     log(f"Metadati scaricati: {n_metadati}")

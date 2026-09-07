@@ -4,7 +4,9 @@
 """Test del canale di avanzamento `Progresso` (nessuna rete, nessuna GUI)."""
 
 import os
+import shutil
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -35,6 +37,136 @@ class TestProgressoBase(unittest.TestCase):
                   fec_download.ESITO_SALTATO,
                   fec_download.ESITO_ERRORE}
         self.assertEqual(len(valori), 3)
+
+
+class ProgressoSpia(fec_download.Progresso):
+    """Registra la sequenza di eventi ricevuti, per poterla asserire."""
+
+    def __init__(self):
+        self.eventi = []
+
+    def fase(self, etichetta, indice, totale_fasi):
+        self.eventi.append(("fase", etichetta, indice, totale_fasi))
+
+    def totale(self, n):
+        self.eventi.append(("totale", n))
+
+    def esito(self, tipo):
+        self.eventi.append(("esito", tipo))
+
+    def messaggio(self, testo):
+        self.eventi.append(("messaggio", testo))
+
+    def conclusa(self, annullato=False):
+        self.eventi.append(("conclusa", annullato))
+
+    def solo(self, *tipi):
+        return [e for e in self.eventi if e[0] in tipi]
+
+
+class _Risposta:
+    """Risposta HTTP finta: nessuna rete nei test."""
+
+    def __init__(self, payload=None, status=200, contenuto=b"<xml/>", filename="F.xml"):
+        self._payload = payload
+        self.status_code = status
+        self.content = contenuto
+        self.headers = {"content-disposition": f"filename={filename}"}
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("non JSON")
+        return self._payload
+
+
+class _Sessione:
+    """Sessione finta: la prima GET restituisce l'elenco, le successive i file.
+    `esiti_file` e' consumata in ordine: 200 = file scaricato, 500 = errore."""
+
+    def __init__(self, elenco, esiti_file):
+        self.elenco = elenco
+        self.esiti_file = list(esiti_file)
+        self.chiamate = 0
+
+    def get(self, url, **kwargs):
+        self.chiamate += 1
+        if self.chiamate == 1:
+            return _Risposta(payload={"fatture": self.elenco})
+        stato = self.esiti_file.pop(0) if self.esiti_file else 200
+        return _Risposta(status=stato)
+
+
+class _Auth:
+    def __init__(self, sessione):
+        self.session = sessione
+        self.headers = {}
+
+
+def _fattura(n):
+    return {"tipoInvio": "T", "idFattura": str(n)}
+
+
+class TestEventiScaricaDaLista(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_annuncia_il_totale_e_un_esito_per_fattura(self):
+        auth = _Auth(_Sessione([_fattura(1), _fattura(2)], [200, 200, 200, 200]))
+        spia = ProgressoSpia()
+        fec_download._scarica_da_lista(
+            auth, "http://x/lista", self.tmp, log=lambda *_: None,
+            escludi_scartate_pa=False, progresso=spia)
+        self.assertIn(("totale", 2), spia.eventi)
+        self.assertEqual(spia.solo("esito"),
+                         [("esito", fec_download.ESITO_OK)] * 2)
+
+    def test_messaggio_prima_di_chiedere_l_elenco(self):
+        auth = _Auth(_Sessione([], []))
+        spia = ProgressoSpia()
+        fec_download._scarica_da_lista(
+            auth, "http://x/lista", self.tmp, log=lambda *_: None,
+            escludi_scartate_pa=False, progresso=spia)
+        self.assertEqual(spia.eventi[0][0], "messaggio")
+
+    def test_elenco_vuoto_annuncia_totale_zero(self):
+        auth = _Auth(_Sessione([], []))
+        spia = ProgressoSpia()
+        fec_download._scarica_da_lista(
+            auth, "http://x/lista", self.tmp, log=lambda *_: None,
+            escludi_scartate_pa=False, progresso=spia)
+        self.assertIn(("totale", 0), spia.eventi)
+
+    def test_file_non_scaricato_produce_un_esito_errore(self):
+        # La GET del file fattura torna 500 su tutti i tentativi di retry.
+        auth = _Auth(_Sessione([_fattura(1)], [500] * 10))
+        spia = ProgressoSpia()
+        fec_download._scarica_da_lista(
+            auth, "http://x/lista", self.tmp, log=lambda *_: None,
+            escludi_scartate_pa=False, progresso=spia)
+        self.assertEqual(spia.solo("esito"),
+                         [("esito", fec_download.ESITO_ERRORE)])
+
+    def test_il_totale_e_quello_dopo_il_filtro_controparte(self):
+        # Due fatture, una sola della controparte cercata: le tacche devono
+        # essere quelle che verranno davvero tentate.
+        elenco = [dict(_fattura(1), pivaCliente="11111111111"),
+                  dict(_fattura(2), pivaCliente="22222222222")]
+        auth = _Auth(_Sessione(elenco, [200, 200]))
+        spia = ProgressoSpia()
+        fec_download._scarica_da_lista(
+            auth, "http://x/lista", self.tmp, log=lambda *_: None,
+            escludi_scartate_pa=False, filtro_piva="11111111111",
+            ruolo_controparte="cliente", progresso=spia)
+        self.assertIn(("totale", 1), spia.eventi)
+
+    def test_senza_progresso_il_comportamento_non_cambia(self):
+        auth = _Auth(_Sessione([_fattura(1)], [200, 200]))
+        n_fatture, _ = fec_download._scarica_da_lista(
+            auth, "http://x/lista", self.tmp, log=lambda *_: None,
+            escludi_scartate_pa=False)
+        self.assertEqual(n_fatture, 1)
 
 
 if __name__ == "__main__":
