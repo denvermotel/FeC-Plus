@@ -168,6 +168,7 @@ class FecGui:
         # (spesso, con molte tab in dev, la console finiva fuori schermo): la posizione
         # viene salvata/ripristinata dalle preferenze. Vedi _apply_sash / _persist_sash.
         self.root.rowconfigure(1, weight=1)
+        # row 2 = fascia di avanzamento: altezza fissa, non si espande (weight 0).
 
         self.cf_var       = tk.StringVar()
         self.pin_var      = tk.StringVar()
@@ -224,6 +225,8 @@ class FecGui:
         self.worker: "threading.Thread | None" = None
         self.control = None   # fec_download.Controllo dell'operazione in corso (pausa/annulla)
         self._tab_notes: dict = {}  # tab (ttk.Frame) -> lista di note mostrate dal pulsante "?"
+        self.progresso = None       # ProgressoGUI dell'operazione in corso
+        self.console_aperta = True  # default provvisorio, vedi Task 9
 
         self._load_config()
         # GUI pubblica: nessun selettore backend, default fisso su "requests" (login
@@ -586,6 +589,7 @@ class FecGui:
         self.main_paned.grid(row=1, column=0, sticky="nsew", padx=12, pady=4)
         self._build_notebook()
         self._build_console()
+        self._build_fascia()
         self.main_paned.bind("<ButtonRelease-1>", lambda _e: self._persist_sash())
         self.root.after(180, self._apply_sash)  # posiziona il divisore a layout pronto
 
@@ -937,8 +941,55 @@ class FecGui:
         # Anagrafica deleghe: ultima tab.
         self._tab_deleghe(nb)
 
+    # ── Fascia di avanzamento ─────────────────────────────────────────────────
+
+    def _build_fascia(self):
+        """Nastro di avanzamento + riga di stato + comandi dell'operazione.
+
+        Riga fissa sotto le tab, SEMPRE visibile: e' cio' che permette di
+        chiudere la console senza portare via nulla di funzionale. Pausa e
+        Interrompi stanno qui, non nel riquadro console, proprio per questo.
+        """
+        import fec_nastro
+
+        fascia = ttk.Frame(self.root, padding=(12, 4, 12, 6))
+        fascia.grid(row=2, column=0, sticky="ew")
+        fascia.columnconfigure(0, weight=1)
+
+        self.modello_nastro = fec_nastro.ModelloNastro()
+        self.nastro = fec_nastro.WidgetNastro(fascia, self.modello_nastro)
+        self.nastro.grid(row=0, column=0, sticky="ew", pady=(0, 3))
+
+        comandi = ttk.Frame(fascia)
+        comandi.grid(row=0, column=1, rowspan=2, sticky="e", padx=(10, 0))
+        self.pausa_btn = ttk.Button(comandi, text="⏸ Pausa",
+                                    command=self._toggle_pausa, width=11)
+        self.pausa_btn.pack(side=tk.LEFT, padx=3)
+        self.stop_btn = ttk.Button(comandi, text="⏹ Interrompi",
+                                   command=self._stop_process, width=12)
+        self.stop_btn.pack(side=tk.LEFT, padx=3)
+        self.console_btn = ttk.Button(comandi, text="▾", width=3,
+                                      command=self._toggle_console)
+        self.console_btn.pack(side=tk.LEFT, padx=(3, 0))
+
+        self.stato_var = tk.StringVar(value="Pronto")
+        ttk.Label(fascia, textvariable=self.stato_var, foreground="#555",
+                  font=("Consolas", 9), anchor="w").grid(row=1, column=0, sticky="ew")
+
+        self._imposta_comandi_task(False)
+
+    def _imposta_comandi_task(self, attivo: bool):
+        """Pausa e Interrompi hanno senso solo mentre un'operazione gira:
+        prima erano cliccabili anche a vuoto."""
+        stato = ("normal" if attivo else "disabled")
+        self.pausa_btn.configure(state=stato)
+        self.stop_btn.configure(state=stato)
+        if not attivo:
+            self.pausa_btn.configure(text="⏸ Pausa")
+
     def _build_console(self):
-        frame = ttk.LabelFrame(self.main_paned, text=" Output ", padding=(6, 4))
+        frame = self.frame_console = ttk.LabelFrame(self.main_paned, text=" Output ",
+                                                    padding=(6, 4))
         self.main_paned.add(frame, weight=1)
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(0, weight=1)
@@ -954,10 +1005,8 @@ class FecGui:
 
         btn_row = ttk.Frame(frame)
         btn_row.grid(row=1, column=0, sticky="e", pady=(4, 0))
-        ttk.Button(btn_row, text="Pulisci",    command=self._clear_console, width=10).pack(side=tk.RIGHT, padx=3)
-        ttk.Button(btn_row, text="Interrompi", command=self._stop_process,  width=10).pack(side=tk.RIGHT, padx=3)
-        self.pausa_btn = ttk.Button(btn_row, text="⏸ Pausa", command=self._toggle_pausa, width=10)
-        self.pausa_btn.pack(side=tk.RIGHT, padx=3)
+        ttk.Button(btn_row, text="Pulisci", command=self._clear_console,
+                   width=10).pack(side=tk.RIGHT, padx=3)
 
     # ── Divisore console/tab ridimensionabile ─────────────────────────────────
 
@@ -994,6 +1043,20 @@ class FecGui:
             fec_store.save_settings(cfg)
         except Exception:
             pass
+
+    def _toggle_console(self):
+        """Mostra/nasconde il riquadro console. Implementazione completa nel
+        Task 9 (persistenza e default da DEV_MODE)."""
+        self._imposta_console(not self.console_aperta)
+
+    def _imposta_console(self, aperta: bool):
+        if aperta:
+            self.main_paned.add(self.frame_console, weight=1)
+            self.console_btn.configure(text="▾")
+        else:
+            self.main_paned.forget(self.frame_console)
+            self.console_btn.configure(text="▸")
+        self.console_aperta = aperta
 
     # ── Console helpers ───────────────────────────────────────────────────────
 
