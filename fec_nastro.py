@@ -237,3 +237,35 @@ class ModelloNastro:
             x += n_blocchi * passo
             visti += n_blocchi
         return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Il widget: un Canvas sottile, senza logica propria
+# ─────────────────────────────────────────────────────────────────────────────
+
+import tkinter as tk        # noqa: E402 - solo il widget dipende da Tk
+
+
+class WidgetNastro(tk.Canvas):
+    """Disegna i rettangoli che il modello descrive. Nient'altro.
+
+    Tutta la logica sta in `ModelloNastro`, che non conosce Tk: qui non si
+    decide nulla, si disegna. Al resize si ridisegna dal modello, quindi non
+    c'e' stato da riconciliare.
+    """
+
+    def __init__(self, parent, modello: ModelloNastro, altezza: int = 10, **kw):
+        super().__init__(parent, height=altezza, highlightthickness=0,
+                         bd=0, bg=COL_FONDO, **kw)
+        self.modello = modello
+        self._altezza = altezza
+        self.bind("<Configure>", lambda _e: self.ridisegna())
+
+    def ridisegna(self) -> None:
+        self.delete("all")
+        larghezza = self.winfo_width()
+        if larghezza <= 1:          # layout non ancora dimensionato
+            return
+        for r in self.modello.rettangoli(larghezza, self._altezza):
+            self.create_rectangle(r.x, r.y, r.x + r.larghezza, r.y + r.altezza,
+                                  fill=r.colore, width=0)
