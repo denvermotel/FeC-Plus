@@ -726,15 +726,15 @@ class FecGui:
         solo se non basta la si accorcia, mai sotto l'altezza minima.
         """
         try:
-            import re
             self.root.update_idletasks()
             area_inizio, area_fine = self._area_utile()
-            # wm_geometry() = "LxA+X+Y", con +X+Y la posizione della cornice esterna.
-            m = re.match(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", self.root.wm_geometry())
-            if not m:
-                return
-            _larghezza_g, _altezza_g, x, y = m.groups()
-            x, y = int(x), int(y)
+            # Posizione della cornice esterna. winfo_x/winfo_y e non il parsing di
+            # wm_geometry(): Tk scrive "+-50" per una finestra a sinistra dello
+            # schermo principale ma "-50" se la geometria e' relativa al bordo
+            # destro, mentre winfo_x/winfo_y danno sempre la coordinata vera
+            # (misurato su Tk 8.6, Windows).
+            x = self.root.winfo_x()
+            y = self.root.winfo_y()
             larghezza = self.root.winfo_width()
             altezza = self.root.winfo_height()
             barra = self.root.winfo_rooty() - y                # barra del titolo + bordo
