@@ -405,6 +405,10 @@ class FecGui:
         # Posizione del divisore console/tab (px dal bordo alto del PanedWindow), o None.
         val = cfg.get("console_sash", None)
         self.console_sash = int(val) if isinstance(val, (int, float)) and val > 0 else None
+        # Console aperta o chiusa. Se la chiave manca decide DEV_MODE: la GUI
+        # pubblica nasce senza terminale, quella di sviluppo con. Appena
+        # l'utente tocca il pulsante, vince la sua scelta.
+        self.console_aperta = bool(cfg.get("console_aperta", DEV_MODE))
 
         cartelle = cfg.get("cartelle_documenti", {}) or {}
         for key, vars_ in self.dirclassi.items():
@@ -433,7 +437,7 @@ class FecGui:
             }
             for key, vars_ in self.dirclassi.items()
         }
-        fec_store.save_settings({
+        preferenze = {
             "login_backend":    self.backend_var.get(),
             "browser_headless": bool(self.headless_var.get()),
             "modalita":         self.modalita.get(),
@@ -457,7 +461,14 @@ class FecGui:
                 "campo2": self.etichetta2_var.get().strip()
                           or ETICHETTE_DELEGHE_DEFAULT["campo2"],
             },
-        })
+        }
+        # console_aperta si riporta solo se l'utente l'ha gia' scelta (vedi
+        # _toggle_console): scriverla qui la inventerebbe al primo salvataggio,
+        # ometterla cancellerebbe la sua scelta, perche' save_settings sovrascrive.
+        precedenti = fec_store.load_settings()
+        if "console_aperta" in precedenti:
+            preferenze["console_aperta"] = bool(precedenti["console_aperta"])
+        fec_store.save_settings(preferenze)
         self._update_dest_info()
         # Applica subito i nuovi nomi etichetta alla tab Deleghe, se già costruita.
         if hasattr(self, "deleghe_tree"):
@@ -768,6 +779,8 @@ class FecGui:
         # divisore sull'altezza definitiva.
         self.root.after(120, self._adatta_alla_area_utile)
         self.root.after(180, self._apply_sash)  # posiziona il divisore a layout pronto
+        # Il default della console si applica a layout pronto, dopo il divisore.
+        self.root.after(220, lambda: self._imposta_console(self.console_aperta))
 
     def _build_credentials(self):
         frame = ttk.LabelFrame(self.root, text=" Credenziali Entratel ", padding=(10, 6))
@@ -1232,9 +1245,21 @@ class FecGui:
             pass
 
     def _toggle_console(self):
-        """Mostra/nasconde il riquadro console. Implementazione completa nel
-        Task 9 (persistenza e default da DEV_MODE)."""
+        """Mostra/nasconde la console su richiesta dell'utente, e ricorda la scelta.
+
+        La preferenza si salva QUI e non in _imposta_console: quello gira anche
+        all'avvio per applicare il default e da «Mostra dettagli», e salverebbe
+        una scelta che l'utente non ha fatto - con la chiave scritta al primo
+        avvio, DEV_MODE non deciderebbe piu' nulla.
+        """
         self._imposta_console(not self.console_aperta)
+        try:
+            import fec_store
+            cfg = fec_store.load_settings()
+            cfg["console_aperta"] = bool(self.console_aperta)
+            fec_store.save_settings(cfg)
+        except Exception:
+            pass
 
     def _imposta_console(self, aperta: bool):
         """Mostra o nasconde la console. Il riquadro inferiore resta nel

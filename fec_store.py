@@ -42,6 +42,7 @@ SETTINGS_FILE = os.path.join(SCRIPT_DIR, "fec_settings.json")
 CRED_KEYS = ("cf", "pin", "cfstudio")
 SETTINGS_KEYS = ("login_backend", "browser_headless", "modalita",
                  "std_destdir", "salva_credenziali", "cartelle_documenti", "console_sash",
+                 "console_aperta",
                  "deleghe_no_update", "std_escludi_scartate_pa", "std_estrai_p7m",
                  "std_csv_ade", "login_sso",
                  "std_includi_trans", "std_includi_disposizione",
