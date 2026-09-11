@@ -1292,6 +1292,15 @@ class FecGui:
         valore numerico risolto (vedi `_profilo_da_modalita`), non la stringa combo.
         Tutto gira in un worker thread, con log instradato nella console.
         """
+        # Un'operazione alla volta. Il controllo va fatto QUI, prima di toccare
+        # self.control, il nastro e self.progresso: _run_inprocess lo ripete, ma
+        # arriva dopo, quando il nastro dell'operazione in corso sarebbe gia'
+        # stato azzerato, la sua pompa resa orfana e Pausa/Interrompi scollegati
+        # dal worker che sta davvero lavorando.
+        if self.worker and self.worker.is_alive():
+            messagebox.showwarning("In esecuzione", "Un'operazione è già in corso.")
+            return
+
         cf, pin, pwd, cfst = self._get_creds()
         backend  = self._backend_attivo()
         headless = bool(self.headless_var.get())
