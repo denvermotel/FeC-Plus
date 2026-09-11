@@ -269,15 +269,22 @@ class FecGui:
         _dev = "  ·  DEV" if DEV_MODE else ""
         self.root.title(f"{APP_NAME} - Fatture e Corrispettivi  ·  v{__version__}{_dev}")
         self._set_app_icon()
-        self.root.geometry("880x1010")
+        # Altezza iniziale entro l'area utile dello schermo: e' solo un limite di
+        # partenza per ridurre il salto, non la parola finale. Un 1010 fisso, a
+        # 1080p con ridimensionamento 133% e taskbar, sporgeva sotto la barra
+        # delle applicazioni. L'aggancio vero, che tiene conto anche della
+        # posizione scelta da Windows (varia da un avvio all'altro), lo fa
+        # _adatta_alla_area_utile dopo che la finestra e' stata disegnata.
+        area_inizio, area_fine = self._area_utile()
+        altezza = max(680, min(1010, area_fine - area_inizio - 100))
+        self.root.geometry(f"880x{altezza}")
         self.root.minsize(780, 680)
         self.root.columnconfigure(0, weight=1)
-        # riga 0 = credenziali, riga 1 = PanedWindow verticale (notebook + console).
-        # Il divisore tra le tab e la console «Output» è trascinabile dall'utente
-        # (spesso, con molte tab in dev, la console finiva fuori schermo): la posizione
-        # viene salvata/ripristinata dalle preferenze. Vedi _apply_sash / _persist_sash.
+        # riga 0 = credenziali, riga 1 = PanedWindow verticale: notebook in alto e,
+        # in basso, la fascia di avanzamento seguita dalla console «Output». Il
+        # divisore è trascinabile e la sua posizione viene salvata/ripristinata
+        # dalle preferenze. Vedi _apply_sash / _persist_sash.
         self.root.rowconfigure(1, weight=1)
-        # row 2 = fascia di avanzamento: altezza fissa, non si espande (weight 0).
 
         self.cf_var       = tk.StringVar()
         self.pin_var      = tk.StringVar()
@@ -690,16 +697,76 @@ class FecGui:
             except tk.TclError:
                 pass
 
+    def _area_utile(self) -> tuple[int, int]:
+        """(y inizio, y fine) dell'area utile dello schermo, esclusa la barra delle
+        applicazioni.
+
+        Su Windows la chiede al sistema (SPI_GETWORKAREA): `winfo_screenheight`
+        conta anche la taskbar, ed e' proprio li' che la finestra finiva. Altrove,
+        o se la chiamata fallisce, stima togliendo 80 px in fondo allo schermo.
+        """
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                from ctypes import wintypes
+                area = wintypes.RECT()
+                if ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(area), 0):
+                    return area.top, area.bottom
+            except Exception:
+                pass
+        return 0, self.root.winfo_screenheight() - 80
+
+    def _adatta_alla_area_utile(self):
+        """Riporta la finestra dentro l'area utile dello schermo, se ne esce.
+
+        L'altezza iniziale da sola non basta: la posizione verticale la sceglie
+        Windows e cambia da un avvio all'altro (misurata l'area interna da y=62 in
+        un avvio, da y=132 in un altro), quindi un margine fisso resta una
+        scommessa. Qui si misura la finestra gia' disegnata: prima la si alza, e
+        solo se non basta la si accorcia, mai sotto l'altezza minima.
+        """
+        try:
+            import re
+            self.root.update_idletasks()
+            area_inizio, area_fine = self._area_utile()
+            # wm_geometry() = "LxA+X+Y", con +X+Y la posizione della cornice esterna.
+            m = re.match(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", self.root.wm_geometry())
+            if not m:
+                return
+            _larghezza_g, _altezza_g, x, y = m.groups()
+            x, y = int(x), int(y)
+            larghezza = self.root.winfo_width()
+            altezza = self.root.winfo_height()
+            barra = self.root.winfo_rooty() - y                # barra del titolo + bordo
+            if self.root.winfo_rooty() + altezza <= area_fine:
+                return
+            y_nuova = max(area_inizio, area_fine - altezza - barra)
+            altezza_nuova = max(680, min(altezza, area_fine - y_nuova - barra))
+            self.root.geometry(f"{larghezza}x{altezza_nuova}+{x}+{y_nuova}")
+        except Exception:
+            pass
+
     def _build_ui(self):
         self._build_credentials()
-        # Contenitore verticale ridimensionabile: notebook (in alto) + console (in basso),
-        # con divisore trascinabile dall'utente. Sostituisce le due righe fisse di grid.
+        # Contenitore verticale ridimensionabile: notebook in alto e, in basso, un
+        # riquadro con la fascia di avanzamento seguita dalla console. Il divisore
+        # tra i due e' trascinabile dall'utente.
         self.main_paned = ttk.PanedWindow(self.root, orient="vertical")
         self.main_paned.grid(row=1, column=0, sticky="nsew", padx=12, pady=4)
         self._build_notebook()
-        self._build_console()
+        # Riquadro inferiore: fascia (riga 0, altezza fissa) SOPRA la console (riga
+        # 1, si espande). Nascondere la console toglie la sola riga 1: la fascia,
+        # che porta Pausa e Interrompi, resta visibile.
+        self.frame_basso = ttk.Frame(self.main_paned)
+        self.frame_basso.columnconfigure(0, weight=1)
+        self.frame_basso.rowconfigure(1, weight=1)
+        self.main_paned.add(self.frame_basso, weight=1)
         self._build_fascia()
+        self._build_console()
         self.main_paned.bind("<ButtonRelease-1>", lambda _e: self._persist_sash())
+        # Prima si riporta la finestra dentro lo schermo, poi si posiziona il
+        # divisore sull'altezza definitiva.
+        self.root.after(120, self._adatta_alla_area_utile)
         self.root.after(180, self._apply_sash)  # posiziona il divisore a layout pronto
 
     def _build_credentials(self):
@@ -1055,14 +1122,15 @@ class FecGui:
     def _build_fascia(self):
         """Nastro di avanzamento + riga di stato + comandi dell'operazione.
 
-        Riga fissa sotto le tab, SEMPRE visibile: e' cio' che permette di
-        chiudere la console senza portare via nulla di funzionale. Pausa e
-        Interrompi stanno qui, non nel riquadro console, proprio per questo.
+        Sta in cima al riquadro inferiore, SOPRA la console, e resta visibile
+        anche quando la console e' chiusa: e' cio' che permette di nasconderla
+        senza portare via nulla di funzionale. Pausa e Interrompi stanno qui,
+        non nel riquadro console, proprio per questo.
         """
         import fec_nastro
 
-        fascia = ttk.Frame(self.root, padding=(12, 4, 12, 6))
-        fascia.grid(row=2, column=0, sticky="ew")
+        fascia = self.fascia = ttk.Frame(self.frame_basso, padding=(0, 2, 0, 6))
+        fascia.grid(row=0, column=0, sticky="ew")
         fascia.columnconfigure(0, weight=1)
 
         self.modello_nastro = fec_nastro.ModelloNastro()
@@ -1097,13 +1165,13 @@ class FecGui:
             self.pausa_btn.configure(text="⏸ Pausa")
 
     def _build_console(self):
-        frame = self.frame_console = ttk.LabelFrame(self.main_paned, text=" Output ",
+        frame = self.frame_console = ttk.LabelFrame(self.frame_basso, text=" Output ",
                                                     padding=(6, 4))
-        self.main_paned.add(frame, weight=1)
+        frame.grid(row=1, column=0, sticky="nsew")
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(0, weight=1)
-        # La console vive nel PanedWindow: la sua altezza è data dal divisore trascinabile
-        # (posizione iniziale/ripristino gestiti da _apply_sash).
+        # La console sta sotto la fascia, nel riquadro inferiore del PanedWindow: la
+        # sua altezza e' data dal divisore trascinabile (vedi _apply_sash).
 
         self.console = scrolledtext.ScrolledText(
             frame, height=12, state="disabled",
@@ -1120,24 +1188,34 @@ class FecGui:
     # ── Divisore console/tab ridimensionabile ─────────────────────────────────
 
     def _apply_sash(self):
-        """Posiziona il divisore all'avvio: valore salvato o, in mancanza, ~58%
-        dell'altezza (console ben visibile). Best-effort; riprova se il layout non
-        è ancora dimensionato."""
+        """Posiziona il divisore. Console aperta: valore salvato o, in mancanza,
+        ~58% dell'altezza. Console chiusa: subito sopra la fascia, cosi' il
+        riquadro inferiore e' alto quanto la fascia e il resto va alle schede.
+        Best-effort; riprova se il layout non e' ancora dimensionato."""
         try:
             self.main_paned.update_idletasks()
             h = self.main_paned.winfo_height()
             if h <= 1:
                 self.root.after(150, self._apply_sash)
                 return
-            pos = self.console_sash if (self.console_sash and 0 < self.console_sash < h) \
-                else int(h * 0.58)
-            self.main_paned.sashpos(0, pos)
+            if not self.console_aperta:
+                # 6 px: spessore del divisore piu' uno, altrimenti la fascia
+                # verrebbe tagliata in basso di quel tanto.
+                pos = h - self.fascia.winfo_reqheight() - 6
+            else:
+                pos = self.console_sash if (self.console_sash and 0 < self.console_sash < h) \
+                    else int(h * 0.58)
+            self.main_paned.sashpos(0, max(1, pos))
         except Exception:
             pass
 
     def _persist_sash(self):
         """Salva la posizione del divisore nelle preferenze, senza toccare le
         credenziali (merge sul file settings esistente)."""
+        if not self.console_aperta:
+            # A console chiusa il divisore segue la fascia: non e' una scelta
+            # dell'utente, e salvarlo cancellerebbe la posizione che aveva scelto.
+            return
         try:
             pos = int(self.main_paned.sashpos(0))
         except Exception:
@@ -1159,13 +1237,21 @@ class FecGui:
         self._imposta_console(not self.console_aperta)
 
     def _imposta_console(self, aperta: bool):
+        """Mostra o nasconde la console. Il riquadro inferiore resta nel
+        PanedWindow: si toglie solo la riga della console, cosi' la fascia di
+        avanzamento, che le sta sopra, non sparisce con lei."""
         if aperta:
-            self.main_paned.add(self.frame_console, weight=1)
+            self.frame_console.grid()
+            self.main_paned.pane(self.frame_basso, weight=1)
             self.console_btn.configure(text="▾")
         else:
-            self.main_paned.forget(self.frame_console)
+            self.frame_console.grid_remove()
+            # A console chiusa lo spazio in piu' va alle schede, non a un riquadro
+            # che contiene soltanto la fascia.
+            self.main_paned.pane(self.frame_basso, weight=0)
             self.console_btn.configure(text="▸")
         self.console_aperta = aperta
+        self.root.after(80, self._apply_sash)
 
     # ── Console helpers ───────────────────────────────────────────────────────
 
