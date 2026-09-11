@@ -11,6 +11,16 @@ Tutte le novità delle versioni e la roadmap delle funzioni future. Progetto in 
 ### Esportazioni
 - **NEW** **Export CSV nel formato dell'Agenzia delle Entrate** dell'elenco fatture: lo stesso file prodotto dal pulsante «Esporta la tabella» del portale, richiesto dai software di contabilità per la riconciliazione. Disponibile come opzione nel **Download Standard** (un solo file per l'intero periodo, con le sole fatture effettivamente scaricate), come formato alternativo all'Excel nella scheda **Utility** e da riga di comando (`--csv-ade`, comando `csv-fatture`). Copre fatture emesse, ricevute, messe a disposizione e transfrontaliere.
 
+### Interfaccia
+- **NEW** **Barra di avanzamento dei download**, sopra il terminale «Output»: un nastro a tacche (una per fattura) che mostra a colpo d'occhio dove si sono verificati errori, con una riga di stato su contatori e fase corrente. A fine operazione resta visibile come resoconto. Copre il Download Standard e lo scarico dei risultati delle Richieste Massive.
+- **NEW** Pulsante **▾/▸** per nascondere il terminale «Output»; la scelta viene ricordata. Nella versione pubblica il terminale parte nascosto.
+- **NEW** Popup di errore per accesso non riuscito e operazioni fallite, con **«Mostra dettagli»**.
+- **CHG** «⏸ Pausa» e «⏹ Interrompi» si sono spostati dal riquadro «Output» alla nuova barra, sono attivi solo mentre un'operazione è in corso e funzionano anche nello scarico dei risultati delle Richieste Massive.
+- **CHG** Il popup di fine operazione segnala quanti documenti non sono stati scaricati o sono stati saltati.
+- **CHG** All'avvio la finestra si adatta allo spazio utile dello schermo, senza finire sotto la barra delle applicazioni.
+- **FIX** Avviare una seconda operazione mentre un'altra è in corso non azzera più l'avanzamento di quella in corso.
+- **FIX** Una fattura il cui file non viene restituito dal portale (errore HTTP) viene ora segnalata come errore, invece di passare inosservata.
+
 ## [0.03 alpha] (luglio 2026)
 
 ### Modalità di accesso

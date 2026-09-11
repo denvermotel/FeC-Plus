@@ -17,6 +17,7 @@ Nasce come evoluzione del progetto `FeCscraper`, aggiungendo al core originale n
 * **Accesso con SPID / CIE** oltre alle credenziali Entratel/Fisconline.
 * **Esportazione CSV formato Agenzia delle Entrate:** l'elenco fatture nello stesso formato del pulsante «Esporta la tabella» del portale, per la riconciliazione con i software di contabilità.
 * **Bolli virtuali:** riepilogo CSV (elenco A/B, importo, stato pagamento) per trimestre o anno intero.
+* **Barra di avanzamento:** nastro a tacche con l'esito di ogni fattura durante il download, terminale «Output» che si può nascondere.
 * **Cross-platform:** interfaccia grafica (tkinter) per Windows e macOS.
 
 ## 🚀 Installazione e avvio

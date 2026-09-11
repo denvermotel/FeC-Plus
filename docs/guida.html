@@ -85,6 +85,16 @@ playwright install chromium</code></pre>
         <li>Nella scheda <strong>Download Standard</strong>, spuntando <strong>«Genera anche il CSV dell'elenco»</strong>: il file viene salvato accanto alle fatture scaricate, <strong>uno solo per l'intero periodo</strong> anche quando questo viene spezzato in blocchi, e contiene <strong>solo le fatture effettivamente scaricate</strong> (quindi rispetta anche l'eventuale filtro per controparte).</li>
         <li>Nella scheda <strong>Utility</strong>, scegliendo il formato <strong>«CSV Agenzia Entrate»</strong> al posto dell'Excel: in questo caso non viene scaricata nessuna fattura, si genera solo l'elenco. Non richiede il pacchetto <code>openpyxl</code> e non legge il dettaglio delle singole fatture, quindi è immediato anche su periodi ampi; in cambio non ha le colonne per aliquota IVA dell'Excel. Non è disponibile per i Corrispettivi.</li>
       </ul>
+
+      <h3>Barra di avanzamento e terminale «Output»</h3>
+      <p class="sub">Durante il Download Standard e lo scarico dei risultati delle Richieste Massive, sopra il riquadro <strong>«Output»</strong> compare una barra che mostra come procede l'operazione.</p>
+      <ul>
+        <li>Il <strong>nastro a tacche</strong> ha una tacca per ogni fattura: <strong>verde</strong> scaricata, <strong>ambra</strong> saltata perché rifiutata dalla Pubblica Amministrazione, <strong>rossa</strong> in errore, <strong>grigia</strong> ancora da scaricare, <strong>blu</strong> quella in lavorazione in questo momento. Le tacche rosse sono disegnate più alte delle altre, così un errore si nota subito anche a colpo d'occhio; se le fatture sono molte, ogni tacca ne rappresenta più di una e prende il colore del caso peggiore fra quelle che raggruppa.</li>
+        <li>La riga sotto il nastro indica cosa si sta scaricando, a che punto si è arrivati, quante fatture sono state scaricate, quante saltate, quante in errore, e su quante fasi complessive si trova l'operazione in corso.</li>
+        <li>A fine operazione il nastro non scompare: resta visibile come resoconto, finché non si avvia un'altra operazione.</li>
+        <li>I pulsanti <strong>⏸ Pausa</strong> e <strong>⏹ Interrompi</strong> si trovano su questa barra e si attivano solo mentre un'operazione è in corso; l'interruzione avviene fra una fattura e l'altra.</li>
+        <li>Il pulsante <strong>▾/▸</strong> mostra o nasconde il terminale «Output»; la scelta viene ricordata per le volte successive. Se qualcosa va storto (per esempio l'accesso non riesce), compare comunque una finestra con l'errore e un pulsante <strong>«Mostra dettagli»</strong> che apre il terminale.</li>
+      </ul>
     </div>
   </section>
 
