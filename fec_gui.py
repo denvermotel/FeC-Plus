@@ -3757,6 +3757,14 @@ class FecGui:
         file scaricato è ancora uno zip (impostazione «estrai automaticamente»
         disattivata), propone in un popup finale l'estrazione e l'eliminazione
         (soft-delete) della richiesta."""
+        # Un'operazione alla volta, controllata QUI prima di toccare nastro e
+        # progresso: _run_inprocess lo ripete, ma arriva dopo, quando il nastro
+        # del download in corso sarebbe gia' stato azzerato e la sua pompa resa
+        # orfana.
+        if self.worker and self.worker.is_alive():
+            messagebox.showwarning("In esecuzione", "Un'operazione è già in corso.")
+            return
+
         cf, pin, pwd, cfst = self._get_creds()
         profilo = _profilo_da_modalita(self.modalita.get())
         backend = self._backend_attivo()
@@ -3767,6 +3775,18 @@ class FecGui:
         for r in selezionate:
             gruppi.setdefault((r["cf_cliente"], r["piva"]), []).append(r)
 
+        # Una fase per gruppo (cliente, P.IVA): qui non ci sono periodi da
+        # spezzare, quindi il totale delle fasi e' noto subito.
+        self.modello_nastro.azzera()
+        self.progresso = ProgressoGUI(self, len(gruppi))
+        self.progresso.avvia_pompa()
+        import fec_download
+        self.control = fec_download.Controllo()
+        self._reset_pausa_btn()
+        control = self.control
+        self._imposta_comandi_task(True)
+        progresso = self.progresso
+
         def task(log):
             from ade_auth import autentica, seleziona_utenza, Creds, AuthError
             import fec_download
@@ -3774,36 +3794,51 @@ class FecGui:
             log(f"\n{'─' * 60}\n▶  Scarico risultati Richieste Massive selezionati\n{'─' * 60}")
             auth = None
             risultati = []
-            for (cfcl, piva), righe_gruppo in gruppi.items():
-                creds = Creds(nomeutente=cf, pin=pin, password=pwd, cfstudio=cfst,
-                              cf_cliente=cfcl, piva=piva, profilo=profilo)
-                try:
-                    if auth is None:
-                        auth = autentica(creds, backend=backend, headless=headless, log=log,
-                                         scegli_piva=self._chiedi_piva_thread)
-                    else:
-                        auth = seleziona_utenza(auth, creds, log=log,
-                                               scegli_piva=self._chiedi_piva_thread)
-                except AuthError as exc:
-                    log(f"❌ Accesso/utenza {cfcl}: {exc.dettaglio}")
-                    continue
-                for r in righe_gruppo:
-                    classe = "risultati_massive" if r["tipo_ade"] == "FATT" else "risultati_corrispettivi"
-                    destdir, sotto = self._dest_classe(classe)
-                    log(f"\n[{r['etichetta']}] id {r['id_richiesta']}...")
+            try:
+                for (cfcl, piva), righe_gruppo in gruppi.items():
+                    control.check()
+                    progresso.fase(f"Risultati massive · {cfcl}", 0, len(gruppi))
+                    progresso.totale(len(righe_gruppo))
+                    creds = Creds(nomeutente=cf, pin=pin, password=pwd, cfstudio=cfst,
+                                  cf_cliente=cfcl, piva=piva, profilo=profilo)
                     try:
-                        salvati = fec_download.scarica_risposta_massiva(
-                            auth, r["id_richiesta"], cf_cliente=cfcl, tipo_label=r["etichetta"],
-                            dal=r.get("dal", ""), al=r.get("al", ""),
-                            dest_dir=destdir, sottocartella=sotto, estrai_zip=estrai_zip, log=log)
-                    except fec_download.DownloadError as exc:
-                        log(f"   ❌ {exc}")
+                        if auth is None:
+                            auth = autentica(creds, backend=backend, headless=headless, log=log,
+                                             scegli_piva=self._chiedi_piva_thread)
+                        else:
+                            auth = seleziona_utenza(auth, creds, log=log,
+                                                   scegli_piva=self._chiedi_piva_thread)
+                    except AuthError as exc:
+                        log(f"❌ Accesso/utenza {cfcl}: {exc.dettaglio}")
+                        for _ in righe_gruppo:
+                            progresso.esito(fec_download.ESITO_ERRORE)
                         continue
-                    fec_richieste_massive.segna_scaricata(r["id_richiesta"])
-                    log(f"   ✅ {len(salvati)} file salvati.")
-                    risultati.append({"id_richiesta": r["id_richiesta"], "etichetta": r["etichetta"],
-                                      "salvati": salvati})
+                    for r in righe_gruppo:
+                        control.check()
+                        classe = "risultati_massive" if r["tipo_ade"] == "FATT" else "risultati_corrispettivi"
+                        destdir, sotto = self._dest_classe(classe)
+                        log(f"\n[{r['etichetta']}] id {r['id_richiesta']}...")
+                        try:
+                            salvati = fec_download.scarica_risposta_massiva(
+                                auth, r["id_richiesta"], cf_cliente=cfcl, tipo_label=r["etichetta"],
+                                dal=r.get("dal", ""), al=r.get("al", ""),
+                                dest_dir=destdir, sottocartella=sotto, estrai_zip=estrai_zip, log=log)
+                        except fec_download.DownloadError as exc:
+                            log(f"   ❌ {exc}")
+                            progresso.esito(fec_download.ESITO_ERRORE)
+                            continue
+                        fec_richieste_massive.segna_scaricata(r["id_richiesta"])
+                        log(f"   ✅ {len(salvati)} file salvati.")
+                        progresso.esito(fec_download.ESITO_OK)
+                        risultati.append({"id_richiesta": r["id_richiesta"], "etichetta": r["etichetta"],
+                                          "salvati": salvati})
+            except fec_download.DownloadAnnullato as exc:
+                log(f"\n⏹  {exc}")
+                progresso.conclusa(annullato=True)
+                self.root.after(0, self._mostra_popup_dopo_download, risultati)
+                return
             log("\n[Completato]")
+            progresso.conclusa()
             self.root.after(0, self._mostra_popup_dopo_download, risultati)
 
         self._run_inprocess(task)
