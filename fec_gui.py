@@ -205,7 +205,10 @@ class ProgressoGUI:
     def ferma(self):
         self.viva = False
 
-    def _pompa(self):
+    def svuota(self):
+        """Applica gli eventi in coda e ridisegna una volta, senza riprogrammarsi.
+        Serve a chi deve leggere lo stato aggiornato adesso (popup di fine
+        operazione, fine del worker) invece di aspettare il prossimo giro."""
         import queue as _q
         cambiato = False
         while True:
@@ -218,6 +221,9 @@ class ProgressoGUI:
         if cambiato:
             self.app.nastro.ridisegna()
             self.app.stato_var.set(self._riga_di_stato())
+
+    def _pompa(self):
+        self.svuota()
         if self.viva:
             self.app.root.after(self.INTERVALLO_MS, self._pompa)
 
@@ -1387,11 +1393,11 @@ class FecGui:
         self._reset_pausa_btn()
         self._imposta_comandi_task(False)
         if self.progresso is not None:
-            # Prima si ferma, poi un ultimo giro di pompa: cosi' la coda si
-            # svuota senza riprogrammare un altro giro. Il nastro resta com'e'
-            # come resoconto, fino al task successivo.
+            # Prima si ferma, poi uno svuotamento finale della coda: cosi' il
+            # nastro resta com'e' come resoconto, fino al task successivo,
+            # senza riprogrammare un altro giro di pompa.
             self.progresso.ferma()
-            self.progresso._pompa()
+            self.progresso.svuota()
 
     def _esegui_in_process(self, cfcl, piva, profilo: int, descrizione, operazione,
                            fasi_previste: int = 1):
@@ -1447,6 +1453,9 @@ class FecGui:
                                 scegli_piva=self._chiedi_piva_thread)
             except AuthError as exc:
                 log(f"\n❌ Login fallito allo step «{exc.step}»: {exc.dettaglio}")
+                progresso.conclusa()
+                self.root.after(0, self._mostra_errore, "Accesso non riuscito",
+                                f"Login fallito allo step «{exc.step}».\n\n{exc.dettaglio}")
                 return
             msg_piva = f", P.IVA {res.piva}" if res.piva else ""
             log(f"\n✅ Login OK - backend {res.backend}{msg_piva}. Avvio operazione...")
@@ -1469,12 +1478,14 @@ class FecGui:
             except fec_download.DownloadError as exc:
                 log(f"\n❌ Operazione non riuscita: {exc}")
                 progresso.conclusa()
+                self.root.after(0, self._mostra_errore,
+                                f"{descrizione}: operazione non riuscita", str(exc))
                 return
             log("\n[Completato]")
             progresso.conclusa()
             if self.popup_fine_task.get():
                 cartelle = self._cartelle_da_esito(esito)
-                self.root.after(0, self._conferma_completato, descrizione, cartelle)
+                self.root.after(0, self._conferma_completato_da_nastro, descrizione, cartelle)
 
         self._run_inprocess(task)
 
@@ -1513,7 +1524,18 @@ class FecGui:
         _visita(esito)
         return cartelle
 
-    def _conferma_completato(self, descrizione: str, cartelle: list[str]):
+    def _conferma_completato_da_nastro(self, descrizione: str, cartelle: list[str]):
+        """Popup di fine operazione con i conteggi del nastro, letti sul thread Tk
+        DOPO aver svuotato la coda eventi: letti dal worker sarebbero indietro
+        fino a un giro di pompa (gli ultimi esiti ancora in coda) e toccherebbero
+        da un altro thread una struttura che la pompa sta modificando."""
+        if self.progresso is not None:
+            self.progresso.svuota()
+        r = self.modello_nastro.riepilogo()
+        self._conferma_completato(descrizione, cartelle, r.errori, r.saltati)
+
+    def _conferma_completato(self, descrizione: str, cartelle: list[str],
+                             errori: int = 0, saltati: int = 0):
         """
         Popup di conferma a fine operazione, con un pulsante «Apri cartella» per
         ciascuna cartella di destinazione (aperta in Esplora risorse). Senza
@@ -1528,6 +1550,15 @@ class FecGui:
 
         ttk.Label(frm, text=f"✅  {descrizione}: operazione completata.",
                   font=("", 10, "bold")).pack(anchor="w")
+
+        if errori or saltati:
+            pezzi = []
+            if errori:
+                pezzi.append(f"{errori} documenti non scaricati")
+            if saltati:
+                pezzi.append(f"{saltati} saltati (rifiutati dalla P.A.)")
+            ttk.Label(frm, text="⚠️  " + ", ".join(pezzi) + ".",
+                      foreground="#b25000").pack(anchor="w", pady=(6, 0))
 
         if cartelle:
             ttk.Label(frm, text="File salvati in:").pack(anchor="w", pady=(10, 2))
@@ -1544,6 +1575,45 @@ class FecGui:
         win.bind("<Return>", lambda _e: win.destroy())
 
         # Centro il popup sulla finestra principale.
+        win.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_width()) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - win.winfo_height()) // 3
+        win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        win.grab_set()
+        win.focus_set()
+
+    def _mostra_errore(self, titolo: str, messaggio: str):
+        """Popup di errore per gli esiti che oggi finivano solo nel log.
+
+        Con la console chiusa di default, un ramo che esce in silenzio lascia
+        l'utente davanti a una finestra inerte senza sapere perche'. «Mostra
+        dettagli» apre il terminale: e' il ponte fra GUI pulita e utente che
+        deve poterci segnalare un problema.
+        """
+        win = tk.Toplevel(self.root)
+        win.title(titolo)
+        win.transient(self.root)
+        win.resizable(False, False)
+        frm = ttk.Frame(win, padding=16)
+        frm.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(frm, text=f"❌  {titolo}", font=("", 10, "bold")).pack(anchor="w")
+        ttk.Label(frm, text=messaggio, wraplength=460, justify="left",
+                  foreground="#555").pack(anchor="w", pady=(8, 0))
+
+        riga = ttk.Frame(frm)
+        riga.pack(fill=tk.X, pady=(14, 0))
+
+        def _dettagli():
+            if not self.console_aperta:
+                self._imposta_console(True)
+            win.destroy()
+
+        ttk.Button(riga, text="Mostra dettagli", command=_dettagli).pack(side=tk.LEFT)
+        ttk.Button(riga, text="Chiudi", command=win.destroy).pack(side=tk.RIGHT)
+
+        win.bind("<Escape>", lambda _e: win.destroy())
+        win.bind("<Return>", lambda _e: win.destroy())
         win.update_idletasks()
         x = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_width()) // 2
         y = self.root.winfo_rooty() + (self.root.winfo_height() - win.winfo_height()) // 3
