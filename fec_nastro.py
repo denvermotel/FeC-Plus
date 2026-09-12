@@ -112,11 +112,19 @@ class ModelloNastro:
 
     def __init__(self):
         self.segmenti: list[Segmento] = []
+        self.concluso = False
 
     # ── Costruzione ───────────────────────────────────────────────────────
 
     def azzera(self) -> None:
         self.segmenti = []
+        self.concluso = False
+
+    def chiudi(self) -> None:
+        """L'operazione e' finita (bene, male o interrotta): da qui in poi nessuna
+        posizione e' «in lavorazione». Senza, a ogni uscita anticipata l'ultimo
+        segmento incompleto restava con la tacca blu su un'operazione conclusa."""
+        self.concluso = True
 
     def nuovo_segmento(self, etichetta: str) -> None:
         self.segmenti.append(Segmento(etichetta))
@@ -170,7 +178,11 @@ class ModelloNastro:
         non si va a cercare piu' indietro. Un segmento precedente rimasto
         incompleto e' lavoro abbandonato, non lavoro in corso - dipingerlo di
         blu su un resoconto concluso direbbe il falso.
+
+        Dopo `chiudi()` torna sempre None: l'operazione e' finita.
         """
+        if self.concluso:
+            return None
         for i in range(len(self.segmenti) - 1, -1, -1):
             seg = self.segmenti[i]
             if seg.totale is None:

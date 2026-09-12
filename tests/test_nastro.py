@@ -196,5 +196,35 @@ class TestRettangoli(unittest.TestCase):
         self.assertEqual(colori.count(fec_nastro.COL_DA_FARE), 2)
 
 
+class TestChiudi(unittest.TestCase):
+    """`chiudi()`: a operazione finita nessuna tacca e' «in lavorazione»."""
+
+    def test_chiudi_toglie_la_tacca_corrente_da_un_segmento_incompleto(self):
+        m = fec_nastro.ModelloNastro()
+        m.nuovo_segmento("Emesse")
+        m.imposta_totale(4)
+        m.aggiungi_esito(ESITO_OK)
+        self.assertIn(fec_nastro.COL_CORRENTE,
+                      [r.colore for r in m.rettangoli(400, 10)])
+        m.chiudi()
+        colori = [r.colore for r in m.rettangoli(400, 10)]
+        self.assertNotIn(fec_nastro.COL_CORRENTE, colori)
+        # Le posizioni mai lavorate restano «da fare», non spariscono.
+        self.assertEqual(colori.count(fec_nastro.COL_DA_FARE), 3)
+
+    def test_azzera_riapre_il_nastro(self):
+        m = fec_nastro.ModelloNastro()
+        m.nuovo_segmento("uno")
+        m.imposta_totale(2)
+        m.chiudi()
+        m.azzera()
+        self.assertFalse(m.concluso)
+        m.nuovo_segmento("due")
+        m.imposta_totale(3)
+        m.aggiungi_esito(ESITO_OK)
+        self.assertIn(fec_nastro.COL_CORRENTE,
+                      [r.colore for r in m.rettangoli(300, 10)])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -236,13 +236,22 @@ class ProgressoGUI:
             self.app.modello_nastro.nuovo_segmento(evento[1])
         elif tipo == "totale":
             self.app.modello_nastro.imposta_totale(evento[1])
+            # Arrivato l'elenco, «Richiedo l'elenco all'AdE…» e' scaduto: senza
+            # azzerarlo resterebbe visibile per tutto il download.
+            self.messaggio_libero = "" if evento[1] else "Nessuna fattura nel periodo."
         elif tipo == "esito":
             self.app.modello_nastro.aggiungi_esito(evento[1])
         elif tipo == "messaggio":
             self.messaggio_libero = evento[1]
         elif tipo == "conclusa":
-            self.messaggio_libero = ("Interrotto dall'utente." if evento[1]
-                                     else "Operazione completata.")
+            modello = self.app.modello_nastro
+            modello.chiudi()
+            if evento[1]:
+                self.messaggio_libero = "Interrotto dall'utente."
+            elif modello.riepilogo().totale == 0:
+                self.messaggio_libero = "Nessuna fattura nel periodo."
+            else:
+                self.messaggio_libero = "Operazione completata."
 
     def _riga_di_stato(self) -> str:
         r = self.app.modello_nastro.riepilogo()
@@ -251,7 +260,9 @@ class ProgressoGUI:
             pezzi.append(self.etichetta)
         if self.messaggio_libero:
             pezzi.append(self.messaggio_libero)
-        if r.totale is not None:
+        # Mai «0/0» ne' «fase 0 di N»: sono numeri che non dicono nulla e,
+        # accanto a «Operazione completata.», fanno pensare a un difetto.
+        if r.totale is not None and r.totale > 0:
             pezzi.append(f"{r.fatti}/{r.totale}")
             conteggi = []
             if r.ok:
@@ -262,7 +273,8 @@ class ProgressoGUI:
                 conteggi.append(f"❌ {r.errori}")
             if conteggi:
                 pezzi.append("  ".join(conteggi))
-        pezzi.append(f"fase {min(self.fase_corrente, self.totale_fasi)} di {self.totale_fasi}")
+        if self.fase_corrente > 0:
+            pezzi.append(f"fase {min(self.fase_corrente, self.totale_fasi)} di {self.totale_fasi}")
         return "  ·  ".join(pezzi)
 
 
@@ -1234,6 +1246,9 @@ class FecGui:
         if not self.console_aperta:
             # A console chiusa il divisore segue la fascia: non e' una scelta
             # dell'utente, e salvarlo cancellerebbe la posizione che aveva scelto.
+            # Il divisore a console chiusa lo decide la fascia: se l'utente lo
+            # trascina, torna a posto.
+            self._apply_sash()
             return
         try:
             pos = int(self.main_paned.sashpos(0))
@@ -1390,6 +1405,14 @@ class FecGui:
                 fn(log)
             except Exception as exc:
                 log(f"\n❌ {exc}")
+                # Un'eccezione che nessun ramo prevedeva: senza popup, a console
+                # chiusa l'operazione finirebbe in silenzio. La riga di stato lo
+                # dice solo se questa operazione ha una barra ancora viva.
+                progresso = self.progresso
+                if progresso is not None and progresso.viva:
+                    progresso.messaggio("Interrotto per un errore imprevisto.")
+                self.root.after(0, self._mostra_errore, "Errore imprevisto",
+                                str(exc) or exc.__class__.__name__)
             finally:
                 self.root.after(0, self._on_worker_done)
 
@@ -1407,6 +1430,10 @@ class FecGui:
             # senza riprogrammare un altro giro di pompa.
             self.progresso.ferma()
             self.progresso.svuota()
+            # Anche le uscite che non passano da `conclusa` (eccezioni impreviste)
+            # devono chiudere il nastro: nessuna tacca blu su un'operazione finita.
+            self.modello_nastro.chiudi()
+            self.nastro.ridisegna()
 
     def _esegui_in_process(self, cfcl, piva, profilo: int, descrizione, operazione,
                            fasi_previste: int = 1):
@@ -1463,6 +1490,9 @@ class FecGui:
             except AuthError as exc:
                 log(f"\n❌ Login fallito allo step «{exc.step}»: {exc.dettaglio}")
                 progresso.conclusa()
+                # Coda FIFO: questo messaggio arriva dopo `conclusa` e vince su
+                # «Operazione completata.».
+                progresso.messaggio("Accesso non riuscito.")
                 self.root.after(0, self._mostra_errore, "Accesso non riuscito",
                                 f"Login fallito allo step «{exc.step}».\n\n{exc.dettaglio}")
                 return
@@ -1487,6 +1517,7 @@ class FecGui:
             except fec_download.DownloadError as exc:
                 log(f"\n❌ Operazione non riuscita: {exc}")
                 progresso.conclusa()
+                progresso.messaggio("Operazione non riuscita.")
                 self.root.after(0, self._mostra_errore,
                                 f"{descrizione}: operazione non riuscita", str(exc))
                 return
@@ -2609,6 +2640,9 @@ class FecGui:
         self.control = fec_download.Controllo()
         self._reset_pausa_btn()
         control = self.control
+        # Il popup di conferma promette «Interrompi»: va acceso qui. Lo spegne
+        # _on_worker_done, via _run_inprocess.
+        self._imposta_comandi_task(True)
 
         def task(log):
             from ade_auth import autentica, seleziona_utenza, Creds, AuthError
@@ -3809,6 +3843,7 @@ class FecGui:
             log(f"\n{'─' * 60}\n▶  Scarico risultati Richieste Massive selezionati\n{'─' * 60}")
             auth = None
             risultati = []
+            falliti = 0      # richieste non riuscite (accesso o download)
             try:
                 for (cfcl, piva), righe_gruppo in gruppi.items():
                     control.check()
@@ -3827,6 +3862,7 @@ class FecGui:
                         log(f"❌ Accesso/utenza {cfcl}: {exc.dettaglio}")
                         for _ in righe_gruppo:
                             progresso.esito(fec_download.ESITO_ERRORE)
+                            falliti += 1
                         continue
                     for r in righe_gruppo:
                         control.check()
@@ -3841,6 +3877,7 @@ class FecGui:
                         except fec_download.DownloadError as exc:
                             log(f"   ❌ {exc}")
                             progresso.esito(fec_download.ESITO_ERRORE)
+                            falliti += 1
                             continue
                         fec_richieste_massive.segna_scaricata(r["id_richiesta"])
                         log(f"   ✅ {len(salvati)} file salvati.")
@@ -3854,7 +3891,15 @@ class FecGui:
                 return
             log("\n[Completato]")
             progresso.conclusa()
-            self.root.after(0, self._mostra_popup_dopo_download, risultati)
+            if not risultati and falliti > 0:
+                # Tutto fallito: il popup delle azioni facoltative uscirebbe subito
+                # con la lista vuota e il motivo resterebbe solo in console.
+                progresso.messaggio("Nessun risultato scaricato.")
+                self.root.after(0, self._mostra_errore, "Risultati Richieste Massive",
+                                f"Nessun risultato è stato scaricato. "
+                                f"Richieste non riuscite: {falliti}.")
+            else:
+                self.root.after(0, self._mostra_popup_dopo_download, risultati)
 
         self._run_inprocess(task)
 
