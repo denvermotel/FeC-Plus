@@ -1342,29 +1342,38 @@ class FecGui:
                 self.root.after(0, on_done)
 
         def _target():
-            for args in commands:
-                self.root.after(0, self._log, f"\n▶  {' '.join(str(a) for a in args)}\n")
-                try:
-                    self.process = subprocess.Popen(
-                        args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                        text=True, encoding="utf-8", errors="replace", cwd=SCRIPT_DIR,
-                    )
-                    if self.process.stdout is not None:
-                        for line in self.process.stdout:
-                            self.root.after(0, self._log, line)
-                    self.process.wait()
-                    if self.process.returncode != 0:
-                        self.root.after(0, self._log,
-                                        f"\n[Interrotto - codice {self.process.returncode}]\n")
+            try:
+                for args in commands:
+                    self.root.after(0, self._log, f"\n▶  {' '.join(str(a) for a in args)}\n")
+                    try:
+                        self.process = subprocess.Popen(
+                            args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, encoding="utf-8", errors="replace", cwd=SCRIPT_DIR,
+                        )
+                        if self.process.stdout is not None:
+                            for line in self.process.stdout:
+                                self.root.after(0, self._log, line)
+                        self.process.wait()
+                        if self.process.returncode != 0:
+                            self.root.after(0, self._log,
+                                            f"\n[Interrotto - codice {self.process.returncode}]\n")
+                            _finish()
+                            return
+                    except Exception as exc:
+                        self.root.after(0, self._log, f"\n[ERRORE] {exc}\n")
                         _finish()
                         return
-                except Exception as exc:
-                    self.root.after(0, self._log, f"\n[ERRORE] {exc}\n")
-                    _finish()
-                    return
-            self.root.after(0, self._log, "\n[Completato]\n")
-            _finish()
+                self.root.after(0, self._log, "\n[Completato]\n")
+                _finish()
+            finally:
+                # Su ogni via d'uscita: ⏹ non deve restare acceso a processo finito.
+                self.root.after(0, self._imposta_comandi_task, False)
 
+        # Un'installazione con Chromium puo' durare minuti o bloccarsi su una rete
+        # lenta: ⏹ deve poterla fermare (_stop_process -> terminate). Pausa invece
+        # non ha senso su un sottoprocesso.
+        self._imposta_comandi_task(True)
+        self.pausa_btn.configure(state="disabled")
         threading.Thread(target=_target, daemon=True).start()
 
     def _run_inprocess(self, fn):
@@ -2568,6 +2577,12 @@ class FecGui:
         applica in automatico i campi variati (senza popup per singolo cliente). Se non c'è
         alcuna spunta, propone di aggiornarle tutte.
         """
+        # Un'operazione alla volta, controllata PRIMA di tutto: non ha senso
+        # chiedere conferma per un'operazione che non puo' partire, e sostituire
+        # self.control scollegherebbe Pausa/Interrompi dal worker in corso.
+        if self.worker and self.worker.is_alive():
+            messagebox.showwarning("In esecuzione", "Un'operazione è già in corso.")
+            return
         cf, pin, pwd, cfst = self._get_creds()
         if not self.deleghe_rows:
             messagebox.showinfo("Deleghe", "Nessuna delega in anagrafica.")
