@@ -827,19 +827,24 @@ class FecGui:
         for i in range(9):
             self._cred_content.columnconfigure(i, weight=(1 if i % 2 == 1 else 0))
 
+        # Larghezze in unità Tk, cioè la larghezza media di un carattere (la cifra
+        # «0»): le maiuscole di un codice fiscale sono più larghe. Con 16 unità per
+        # tutti, un CF di 16 caratteri restava tagliato di 3-4 lettere. PIN (10
+        # cifre) e password cedono lo spazio che non usano, così la riga resta
+        # larga quasi quanto prima e gli altri campi non si comprimono di più.
         fields = [
-            ("Codice Fiscale:", self.cf_var,      False),
-            ("PIN:",            self.pin_var,      False),
-            ("Password:",       self.pwd_var,      True),
-            ("CF Studio:",      self.cfstudio_var, False),
+            ("Codice Fiscale:", self.cf_var,      False, 24),
+            ("PIN:",            self.pin_var,      False, 11),
+            ("Password:",       self.pwd_var,      True,  12),
+            ("CF Studio:",      self.cfstudio_var, False, 16),
         ]
         self._cred_entries = []
-        for idx, (lbl, var, secret) in enumerate(fields):
+        for idx, (lbl, var, secret, larghezza) in enumerate(fields):
             label = ttk.Label(self._cred_content, text=lbl)
             label.grid(row=0, column=idx * 2, sticky="w", padx=(4, 2))
             if lbl == "CF Studio:":
                 self._cfstudio_label = label
-            entry = ttk.Entry(self._cred_content, textvariable=var, width=16,
+            entry = ttk.Entry(self._cred_content, textvariable=var, width=larghezza,
                               show="●" if secret else "")
             entry.grid(row=0, column=idx * 2 + 1, sticky="ew", padx=(0, 8))
             self._cred_entries.append(entry)
