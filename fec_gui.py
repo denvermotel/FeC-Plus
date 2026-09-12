@@ -480,12 +480,14 @@ class FecGui:
                           or ETICHETTE_DELEGHE_DEFAULT["campo2"],
             },
         }
-        # console_aperta si riporta solo se l'utente l'ha gia' scelta (vedi
-        # _toggle_console): scriverla qui la inventerebbe al primo salvataggio,
-        # ometterla cancellerebbe la sua scelta, perche' save_settings sovrascrive.
+        # console_aperta e console_sash non sono scelte di questa finestra ma di
+        # _toggle_console/_persist_sash: si riportano solo se l'utente le ha gia'
+        # scelte, altrimenti si inventerebbe un valore al primo salvataggio, e
+        # ometterle cancellerebbe la scelta perche' save_settings sovrascrive.
         precedenti = fec_store.load_settings()
-        if "console_aperta" in precedenti:
-            preferenze["console_aperta"] = bool(precedenti["console_aperta"])
+        for chiave_conservata in ("console_aperta", "console_sash"):
+            if chiave_conservata in precedenti:
+                preferenze[chiave_conservata] = precedenti[chiave_conservata]
         fec_store.save_settings(preferenze)
         self._update_dest_info()
         # Applica subito i nuovi nomi etichetta alla tab Deleghe, se già costruita.

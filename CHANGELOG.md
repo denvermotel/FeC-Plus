@@ -20,6 +20,7 @@ Tutte le novità delle versioni e la roadmap delle funzioni future. Progetto in 
 - **CHG** All'avvio la finestra si adatta allo spazio utile dello schermo, senza finire sotto la barra delle applicazioni.
 - **FIX** Avviare una seconda operazione mentre un'altra è in corso non azzera più l'avanzamento di quella in corso.
 - **FIX** Una fattura il cui file non viene restituito dal portale (errore HTTP) viene ora segnalata come errore, invece di passare inosservata.
+- **FIX** Salvare le credenziali non riporta più al valore predefinito la posizione del divisore fra schede e terminale.
 
 ## [0.03 alpha] (luglio 2026)
 
