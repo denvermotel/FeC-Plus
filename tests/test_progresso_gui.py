@@ -102,5 +102,44 @@ class TestNastroChiusoAllaFine(unittest.TestCase):
         self.assertNotIn(fec_nastro.COL_CORRENTE, colori)
 
 
+class _Thread:
+    """Thread finto: basta `is_alive()`."""
+
+    def __init__(self, vivo):
+        self._vivo = vivo
+
+    def is_alive(self):
+        return self._vivo
+
+
+class _Stato:
+    """Solo gli attributi letti da `FecGui._operazione_in_corso`."""
+
+    def __init__(self, worker=None, sequenza=None):
+        self.worker = worker
+        self._sequenza = sequenza
+
+
+class TestOperazioneInCorso(unittest.TestCase):
+    """Operazioni in-process e installazione dipendenze usano gli stessi pulsanti
+    Pausa/Interrompi: non devono poter partire insieme, altrimenti la prima a
+    finire spegne Interrompi all'altra ancora in corso."""
+
+    def _in_corso(self, **kw):
+        return fec_gui.FecGui._operazione_in_corso(_Stato(**kw))
+
+    def test_niente_in_corso(self):
+        self.assertFalse(self._in_corso())
+
+    def test_worker_vivo(self):
+        self.assertTrue(self._in_corso(worker=_Thread(True)))
+
+    def test_sequenza_di_installazione_viva(self):
+        self.assertTrue(self._in_corso(worker=_Thread(False), sequenza=_Thread(True)))
+
+    def test_entrambi_terminati(self):
+        self.assertFalse(self._in_corso(worker=_Thread(False), sequenza=_Thread(False)))
+
+
 if __name__ == "__main__":
     unittest.main()

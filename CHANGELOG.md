@@ -16,6 +16,7 @@ Tutte le novità delle versioni e la roadmap delle funzioni future. Progetto in 
 - **NEW** Pulsante **▾/▸** per nascondere il terminale «Output»; la scelta viene ricordata. Nella versione pubblica il terminale parte nascosto.
 - **NEW** Popup di errore per accesso non riuscito e operazioni fallite, con **«Mostra dettagli»**.
 - **CHG** «⏸ Pausa» e «⏹ Interrompi» si sono spostati dal riquadro «Output» alla nuova barra, sono attivi solo mentre un'operazione è in corso e funzionano anche nello scarico dei risultati delle Richieste Massive.
+- **CHG** Installazione e disinstallazione delle dipendenze non partono mentre è in corso un'operazione, e viceversa: prima potevano sovrapporsi e la prima a finire spegneva «⏹ Interrompi» all'altra.
 - **CHG** Il popup di fine operazione segnala quanti documenti non sono stati scaricati o sono stati saltati.
 - **CHG** All'avvio la finestra si adatta allo spazio utile dello schermo, senza finire sotto la barra delle applicazioni.
 - **FIX** Avviare una seconda operazione mentre un'altra è in corso non azzera più l'avanzamento di quella in corso.

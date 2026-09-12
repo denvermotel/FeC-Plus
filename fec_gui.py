@@ -357,6 +357,10 @@ class FecGui:
 
         self.process: "subprocess.Popen | None" = None
         self.worker: "threading.Thread | None" = None
+        # Thread dell'installazione dipendenze (_run_sequence). Si tiene il thread e
+        # non il sottoprocesso: fra un comando e l'altro il processo e' gia' finito,
+        # ma la sequenza no. Vedi _operazione_in_corso.
+        self._sequenza: "threading.Thread | None" = None
         self.control = None   # fec_download.Controllo dell'operazione in corso (pausa/annulla)
         self._tab_notes: dict = {}  # tab (ttk.Frame) -> lista di note mostrate dal pulsante "?"
         self.progresso = None       # ProgressoGUI dell'operazione in corso
@@ -521,6 +525,11 @@ class FecGui:
     def _install_deps(self):
         """Pulsante «Installa dipendenze»: fa scegliere se installare tutto (incluso
         Playwright + Chromium) o solo il set leggero per il backend «requests»."""
+        # Controllato prima di chiedere cosa installare: se non si puo' partire la
+        # scelta e' inutile. _run_sequence lo ripete, ed e' la guardia vera.
+        if self._operazione_in_corso():
+            messagebox.showwarning("In esecuzione", "Un'operazione è già in corso.")
+            return
         # App pacchettizzata (PyInstaller) senza un Python di sistema: pip/playwright
         # non sono installabili. Spieghiamo il perché invece di lanciare un comando muto.
         if PYTHON is None:
@@ -576,6 +585,9 @@ class FecGui:
     def _uninstall_deps(self):
         """Strumento DEV: disinstalla le dipendenze selezionate via `pip uninstall`.
         Utile per testare il banner/controllo dipendenze. Solo in DEV_MODE."""
+        if self._operazione_in_corso():
+            messagebox.showwarning("In esecuzione", "Un'operazione è già in corso.")
+            return
         installate = fec_deps.installed_deps()
         win = tk.Toplevel(self.root)
         win.title("Disinstalla dipendenze (dev)")
@@ -1351,12 +1363,25 @@ class FecGui:
 
     # ── Process runner ────────────────────────────────────────────────────────
 
+    def _operazione_in_corso(self) -> bool:
+        """Vero se sta gia' lavorando qualcosa che usa Pausa/Interrompi: un'operazione
+        in-process (download, deleghe, utility...) oppure l'installazione delle
+        dipendenze.
+
+        Le due famiglie accendono e spengono gli stessi pulsanti: se partissero
+        insieme, la prima a finire spegnerebbe Interrompi all'altra ancora in corso.
+        Per l'installazione conta il thread della sequenza, non il singolo
+        sottoprocesso: fra `pip install` e l'installazione del browser il processo
+        e' gia' terminato ma la sequenza no.
+        """
+        return any(t is not None and t.is_alive() for t in (self.worker, self._sequenza))
+
     def _run_sequence(self, commands: list, on_done=None):
         """Esegue più comandi in sequenza nello stesso thread, fermandosi al primo errore.
         Usato solo dall'installazione dipendenze (pip / playwright). `on_done`, se passato,
         viene richiamato nel thread Tk al termine (anche in caso di errore)."""
-        if self.process and self.process.poll() is None:
-            messagebox.showwarning("In esecuzione", "Un processo è già in esecuzione.")
+        if self._operazione_in_corso():
+            messagebox.showwarning("In esecuzione", "Un'operazione è già in corso.")
             return
 
         def _finish():
@@ -1396,11 +1421,12 @@ class FecGui:
         # non ha senso su un sottoprocesso.
         self._imposta_comandi_task(True)
         self.pausa_btn.configure(state="disabled")
-        threading.Thread(target=_target, daemon=True).start()
+        self._sequenza = threading.Thread(target=_target, daemon=True)
+        self._sequenza.start()
 
     def _run_inprocess(self, fn):
         """Esegue una funzione fn(log) in un thread, instradando il log nella console."""
-        if self.worker and self.worker.is_alive():
+        if self._operazione_in_corso():
             messagebox.showwarning("In esecuzione", "Un'operazione è già in corso.")
             return
 
@@ -1457,7 +1483,7 @@ class FecGui:
         # arriva dopo, quando il nastro dell'operazione in corso sarebbe gia'
         # stato azzerato, la sua pompa resa orfana e Pausa/Interrompi scollegati
         # dal worker che sta davvero lavorando.
-        if self.worker and self.worker.is_alive():
+        if self._operazione_in_corso():
             messagebox.showwarning("In esecuzione", "Un'operazione è già in corso.")
             return
 
@@ -2618,7 +2644,7 @@ class FecGui:
         # Un'operazione alla volta, controllata PRIMA di tutto: non ha senso
         # chiedere conferma per un'operazione che non puo' partire, e sostituire
         # self.control scollegherebbe Pausa/Interrompi dal worker in corso.
-        if self.worker and self.worker.is_alive():
+        if self._operazione_in_corso():
             messagebox.showwarning("In esecuzione", "Un'operazione è già in corso.")
             return
         cf, pin, pwd, cfst = self._get_creds()
@@ -3817,7 +3843,7 @@ class FecGui:
         # progresso: _run_inprocess lo ripete, ma arriva dopo, quando il nastro
         # del download in corso sarebbe gia' stato azzerato e la sua pompa resa
         # orfana.
-        if self.worker and self.worker.is_alive():
+        if self._operazione_in_corso():
             messagebox.showwarning("In esecuzione", "Un'operazione è già in corso.")
             return
 
