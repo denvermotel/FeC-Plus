@@ -140,8 +140,10 @@ class TestEventiScaricaDaLista(unittest.TestCase):
         self.assertIn(("totale", 0), spia.eventi)
 
     def test_file_non_scaricato_produce_un_esito_errore(self):
-        # La GET del file fattura torna 500 su tutti i tentativi di retry.
-        auth = _Auth(_Sessione([_fattura(1)], [500] * 10))
+        # La GET del file fattura torna 500. `_get_con_retry` ritenta solo sugli
+        # errori di CONNESSIONE, non sugli status HTTP: la Response 500 arriva
+        # quindi al ramo `else` e la fattura conta come errore.
+        auth = _Auth(_Sessione([_fattura(1)], [500]))
         spia = ProgressoSpia()
         fec_download._scarica_da_lista(
             auth, "http://x/lista", self.tmp, log=lambda *_: None,
@@ -162,6 +164,40 @@ class TestEventiScaricaDaLista(unittest.TestCase):
             ruolo_controparte="cliente", progresso=spia)
         self.assertIn(("totale", 1), spia.eventi)
 
+    def test_fattura_scartata_dalla_pa_produce_un_esito_saltato(self):
+        # Il controllo reale interroga l'AdE: qui lo si sostituisce con uno che
+        # dichiara scartata la sola fattura T1.
+        auth = _Auth(_Sessione([_fattura(1), _fattura(2)], [200, 200]))
+        spia = ProgressoSpia()
+        with unittest.mock.patch.object(
+                fec_download, "_e_scartata_pa",
+                lambda _auth, fattura_file, _log: fattura_file == "T1"):
+            fec_download._scarica_da_lista(
+                auth, "http://x/lista", self.tmp, log=lambda *_: None,
+                escludi_scartate_pa=True, progresso=spia)
+        esiti = spia.solo("esito")
+        self.assertEqual(len(esiti), 2)
+        self.assertEqual(esiti.count(("esito", fec_download.ESITO_SALTATO)), 1)
+        self.assertEqual(esiti.count(("esito", fec_download.ESITO_OK)), 1)
+
+    def test_metadato_fallito_non_aggiunge_un_secondo_esito(self):
+        # Il file fattura torna 200; la GET dei metadati cade per errore di
+        # connessione su tutti i tentativi. La fattura e' gia' stata contata:
+        # una tacca vale un documento, non un file.
+        class _SessioneMetadatoRotto(_Sessione):
+            def get(self, url, **kwargs):
+                if "FILE_METADATI" in url:
+                    raise fec_download.requests.exceptions.ConnectionError("giu'")
+                return super().get(url, **kwargs)
+
+        auth = _Auth(_SessioneMetadatoRotto([_fattura(1)], [200]))
+        spia = ProgressoSpia()
+        with unittest.mock.patch.object(fec_download.time, "sleep", lambda *_: None):
+            fec_download._scarica_da_lista(
+                auth, "http://x/lista", self.tmp, log=lambda *_: None,
+                escludi_scartate_pa=False, progresso=spia)
+        self.assertEqual(spia.solo("esito"), [("esito", fec_download.ESITO_OK)])
+
     def test_senza_progresso_il_comportamento_non_cambia(self):
         auth = _Auth(_Sessione([_fattura(1)], [200, 200]))
         n_fatture, _ = fec_download._scarica_da_lista(
@@ -179,7 +215,9 @@ class TestFasiEseguiRichiesta(unittest.TestCase):
 
     def _finta(self, registro):
         def _scarica(auth, dal, al, **kw):
-            registro.append((dal, al, kw.get("progresso")))
+            # Registra anche SE la chiave c'e', non solo il valore: `kw.get`
+            # non distingue una chiave assente da una chiave con valore None.
+            registro.append((dal, al, kw.get("progresso"), "progresso" in kw))
             return fec_download.DownloadResult("CF", "/tmp", 0, 0)
         return _scarica
 
@@ -219,12 +257,14 @@ class TestFasiEseguiRichiesta(unittest.TestCase):
                                      progresso=spia)
         self.assertIs(registro[0][2], spia)
 
-    def test_senza_progresso_non_lo_inoltra(self):
+    def test_senza_progresso_inoltra_none(self):
+        # Come `control`: la chiave arriva sempre ai download, con valore None.
         registro = []
         spec = self.fq._Spec(self._finta(registro), "%d%m%Y", "download")
         with unittest.mock.patch.dict(self.fq.TIPI, {"finto": spec}):
             self.fq.esegui_richiesta(None, "finto", dal="01012026", al="31012026",
                                      cf_cliente="CF", log=lambda *_: None)
+        self.assertTrue(registro[0][3], "la chiave «progresso» non e' stata inoltrata")
         self.assertIsNone(registro[0][2])
 
 

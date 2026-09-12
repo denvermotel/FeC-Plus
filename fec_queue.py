@@ -154,8 +154,8 @@ def esegui_richiesta(auth, tipo: str, *, dal: str | None = None, al: str | None 
     controllato tra un blocco e l'altro e passato ai download per il controllo tra i file.
 
     `progresso` (opzionale, `fec_download.Progresso`): riceve una `fase()` per
-    blocco di periodo e viene inoltrato ai download, che vi emettono totale ed
-    esiti. Gli indici di fase sono LOCALI a questa chiamata: comporre gli offset
+    blocco di periodo e, come `control`, viene inoltrato ai soli tipi download
+    (anche quando e' None), che vi emettono totale ed esiti. Gli indici di fase sono LOCALI a questa chiamata: comporre gli offset
     di un task con piu' richieste spetta al chiamante (vedi `fec_gui`).
 
     `csv_ade` (solo tipi "download"): oltre ai file scaricati genera nella stessa
@@ -204,10 +204,7 @@ def esegui_richiesta(auth, tipo: str, *, dal: str | None = None, al: str | None 
         if spec.kind == "download":
             # I download passano il control all'engine (controllo tra i file).
             extra["control"] = control
-            if progresso is not None:
-                # Non passare la chiave quando assente: retrocompatibilità con
-                # chi implementa TIPI senza **kwargs (es. test_queue_csv_ade.py).
-                extra["progresso"] = progresso
+            extra["progresso"] = progresso
             if csv_ade:
                 extra["voci_out"] = voci_csv
         elif spec.kind == "invio" and multi:

@@ -94,7 +94,7 @@ class TestCsvAdeNelDownload(unittest.TestCase):
         def severa(auth, dal, al, *, voci_out=None, control=None, cf_cliente="",
                    dest_dir=None, sottocartella=True, log=print,
                    escludi_scartate_pa=True, estrai_p7m=False,
-                   filtro_piva="", filtro_cf=""):
+                   filtro_piva="", filtro_cf="", progresso=None):
             ricevuti["ok"] = True
             if voci_out is not None:
                 voci_out.append(_voce("x"))
