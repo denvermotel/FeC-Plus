@@ -85,8 +85,8 @@ def main():
     # Un CE (servizi vuoto, verifica anche lo strip degli spazi nel CF).
     ce = next(r for r in lista if r.get("tipoDelega") == "CE")
     ce = dict(ce)
-    ce["cfDelegante"] = (ce.get("cfDelegante") or "") + "   "  # forza lo spazio finale
     aggiungi(ce)
+    campione[-1]["cfDelegante"] = campione[-1]["cfDelegante"] + "   "  # spazi finali nel CF sintetico
 
     # Due UV rilevanti con lo STESSO cfDelegante (per l'aggregazione), se esistono;
     # altrimenti li costruiamo a partire da uno rilevante esistente.

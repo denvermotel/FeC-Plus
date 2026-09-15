@@ -80,7 +80,7 @@
     },
     {
       "tipoDelega": "CE",
-      "cfDelegante": "CFDELEG000030",
+      "cfDelegante": "CFDELEG000030   ",
       "cfDelegato": "01820310819",
       "servizi": [],
       "dataInizioDel": "31/10/2023",
