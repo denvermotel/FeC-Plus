@@ -170,6 +170,26 @@ def merge_many(rows: list[dict], nuove: list[dict]) -> tuple[list[dict], int, in
     return rows, aggiunte, aggiornate
 
 
+def merge_many_con_nuovi(rows: list[dict], nuove: list[dict]
+                         ) -> tuple[list[dict], list[str]]:
+    """
+    Come `merge_many` (stessa regola: su un CF gia presente aggiorna solo
+    `data_fine_delega`), ma ritorna la lista dei CF REALMENTE nuovi invece dei
+    soli conteggi - serve a chi, dopo l'import, deve sapere quali CF non erano
+    ancora in anagrafica per completarne i dati (es. il check aggiuntivo
+    codice_destinatario/canale_massivo dopo una sincronizzazione dal portale).
+    """
+    esistenti = {r.get("codice_fiscale", "").upper() for r in rows}
+    nuovi: list[str] = []
+    for n in nuove:
+        cf = str(n.get("codice_fiscale", "")).strip().upper()
+        if cf and cf not in esistenti:
+            nuovi.append(cf)
+            esistenti.add(cf)
+        upsert(rows, n)
+    return rows, nuovi
+
+
 # ── CSV «formato app» (round-trip) ────────────────────────────────────────────
 
 def import_csv_app(path: str) -> list[dict]:
