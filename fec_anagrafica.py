@@ -17,6 +17,10 @@ Fonti dati (tutte REST, nessuno scraping HTML):
     (HTTP 200 con `nuovaAdesione == true` e `revoca == false` ⇒ attiva; 404 ⇒ non attiva).
   - codice destinatario / canale SDI -> GET /ser/api/censimenti/v1/registrazione/censimenti
     (campo `indirizzoStandard` quando `tipoIndirizzoStandard == "CODICE"`; 403/PEC ⇒ vuoto).
+  - canale forniture massive -> GET /sm/sm-censimento-puntuale-rest/api/me/canali/providers
+    (elenco dei provider censiti per lo scarico massivo di fatture/corrispettivi/bollo/IVA
+    precompilata senza portale; riepilogo testuale di denominazione + servizi abilitati per
+    provider, vuoto se nessun canale censito o chiamata non autorizzata).
 
 Modulo di solo data layer.
 """
@@ -38,9 +42,15 @@ CENSIMENTI_URL = f"{IVASERVIZI}/ser/api/censimenti/v1/registrazione/censimenti"
 # Stato adesione alla conservazione dati fattura (Profilo fatturazione).
 ADESIONE_URL = f"{IVASERVIZI}/ser/api/fatture/v1/ul/me/adesione/stato"
 FULLTEMPLATE_URL = f"{INSTR_REST}/fullTemplate"
+# Provider censiti per lo scarico massivo (pagina «Censimento canale per forniture
+# massive»), ricavato dai bundle JS della webapp (`doAjaxMassivo`... in realtà il
+# servizio usato da quella pagina è «puntuale», non «massivo»: base
+# /sm/sm-censimento-puntuale-rest/api, endpoint GET /me/canali/providers).
+CANALI_MASSIVO_URL = f"{IVASERVIZI}/sm/sm-censimento-puntuale-rest/api/me/canali/providers"
 
 # Campi dell'anagrafica delega ricavabili da AdE (allineati a fec_deleghe.FIELDS).
-CAMPI_ADE = ("denominazione", "partita_iva", "conservazione", "codice_destinatario", "pec")
+CAMPI_ADE = ("denominazione", "partita_iva", "conservazione", "codice_destinatario", "pec",
+             "canale_massivo")
 
 # Etichette leggibili per il popup di aggiornamento.
 ETICHETTE = {
@@ -49,6 +59,7 @@ ETICHETTE = {
     "conservazione": "Conservazione",
     "codice_destinatario": "Codice destinatario (SDI)",
     "pec": "PEC",
+    "canale_massivo": "Canale forniture massive",
 }
 
 _HTTP_TIMEOUT = (15, 30)
@@ -125,6 +136,47 @@ def _fetch_canale(auth) -> tuple[str, str]:
     return "", ""
 
 
+def _fetch_canale_massivo(auth) -> str:
+    """
+    Riepilogo dei canali censiti per lo scarico massivo (fatture, corrispettivi, bollo,
+    IVA precompilata) senza passare dal portale: GET /me/canali/providers.
+
+    Ogni provider censito ha una denominazione e un elenco di servizi abilitati; li
+    concateno in una riga per provider (`Denominazione (SERVIZIO, SERVIZIO, ...)`), più
+    provider uniti da «; ». Nessun provider censito (200 con lista vuota) o chiamata non
+    autorizzata/errore ⇒ "" (best-effort, mai eccezioni).
+    """
+    try:
+        r = auth.session.get(CANALI_MASSIVO_URL, headers=_headers_ser(auth),
+                             verify=False, timeout=_HTTP_TIMEOUT)
+        if r.status_code != 200:
+            return ""
+        providers = r.json() or []
+    except (requests.RequestException, ValueError):
+        return ""
+    if not isinstance(providers, list):
+        return ""
+    righe = []
+    for p in providers:
+        if not isinstance(p, dict):
+            continue
+        # `denominazione` è la ragione sociale del fornitore del servizio (es. "Sistemi
+        # S.p.a."), quella mostrata dal portale in colonna «Denominazione». Non va
+        # confusa con `denominazioneCanale`, che è il tipo di canale (es. "WebService",
+        # colonna «Tipo canale») - non identifica il fornitore.
+        nome = str(p.get("denominazione") or "").strip()
+        servizi = p.get("tipologiaServizi") or p.get("servizi") or []
+        if isinstance(servizi, list):
+            servizi_s = ", ".join(str(s).strip() for s in servizi if str(s).strip())
+        else:
+            servizi_s = str(servizi or "").strip()
+        if nome and servizi_s:
+            righe.append(f"{nome} ({servizi_s})")
+        elif nome:
+            righe.append(nome)
+    return "; ".join(righe)
+
+
 def recupera(auth, log=None) -> dict:
     """
     Ricava i dati anagrafici del cliente attivo come utenza di lavoro in `auth`.
@@ -140,6 +192,7 @@ def recupera(auth, log=None) -> dict:
         "conservazione": False,
         "codice_destinatario": "",
         "pec": "",
+        "canale_massivo": "",
     }
 
     info = _fetch_full_template(auth)
@@ -152,12 +205,14 @@ def recupera(auth, log=None) -> dict:
 
     dati["conservazione"] = _fetch_conservazione(auth)
     dati["codice_destinatario"], dati["pec"] = _fetch_canale(auth)
+    dati["canale_massivo"] = _fetch_canale_massivo(auth)
 
     if log:
         canale = (f"SDI={dati['codice_destinatario']}" if dati["codice_destinatario"]
                   else f"PEC={dati['pec']}" if dati["pec"] else "canale=-")
         log(f"Anagrafica AdE: denominazione={dati['denominazione']!r} "
-            f"piva={dati['partita_iva']!r} conservazione={dati['conservazione']} {canale}")
+            f"piva={dati['partita_iva']!r} conservazione={dati['conservazione']} {canale} "
+            f"canale_massivo={dati['canale_massivo']!r}")
     return dati
 
 

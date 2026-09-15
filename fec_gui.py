@@ -38,6 +38,10 @@ else:
     ASSETS_DIR = os.path.join(SCRIPT_DIR, "assets")
 APP_ICON = os.path.join(ASSETS_DIR, "AppIcon1024.png")
 DEFAULT_DEST_DIR = os.path.join(SCRIPT_DIR, "Download")
+# Cartella dei file di debug (HAR/dump/log) usati dagli strumenti di sola modalità dev
+# (cattura login, cattura HAR a navigazione libera, dump JSON, log console): fuori da
+# Git, configurabile dall'utente dalle Impostazioni (chiave `materiale_dir`).
+DEFAULT_MATERIALE_DIR = os.path.join(SCRIPT_DIR, "dev", "HAR-Debug")
 
 
 def _python_interprete() -> "str | None":
@@ -328,6 +332,9 @@ class FecGui:
         # dalle Impostazioni e persistiti in fec_settings.json.
         self.etichetta1_var = tk.StringVar(value=ETICHETTE_DELEGHE_DEFAULT["campo1"])
         self.etichetta2_var = tk.StringVar(value=ETICHETTE_DELEGHE_DEFAULT["campo2"])
+        # Cartella dei file di debug (HAR/dump/log), solo modalità dev: rinominabile
+        # dalle Impostazioni e persistita in fec_settings.json.
+        self.materiale_dir = tk.StringVar(value=DEFAULT_MATERIALE_DIR)
 
         # Scheda Download Standard (creati qui per poterli popolare da _load_config)
         self.std_destdir = tk.StringVar(value=DEFAULT_DEST_DIR)
@@ -407,6 +414,8 @@ class FecGui:
         self.headless_var.set(bool(cfg.get("browser_headless", True)))
         self.modalita.set(cfg.get("modalita", self.modalita.get()))
         self.std_destdir.set(cfg.get("std_destdir", DEFAULT_DEST_DIR) or DEFAULT_DEST_DIR)
+        self.materiale_dir.set(cfg.get("materiale_dir", DEFAULT_MATERIALE_DIR)
+                               or DEFAULT_MATERIALE_DIR)
         self.salva_cred_var.set(bool(cfg.get("salva_credenziali", True)))
         self.cred_espanse_var.set(bool(cfg.get("cred_espanse", True)))
         self.cartelle_espanse_var.set(bool(cfg.get("cartelle_espanse", False)))
@@ -464,6 +473,7 @@ class FecGui:
             "browser_headless": bool(self.headless_var.get()),
             "modalita":         self.modalita.get(),
             "std_destdir":      self.std_destdir.get().strip(),
+            "materiale_dir":    self.materiale_dir.get().strip(),
             "salva_credenziali": salva,
             "cartelle_documenti": cartelle,
             "deleghe_no_update": bool(self.deleghe_no_update_var.get()),
@@ -521,6 +531,18 @@ class FecGui:
         path = vars_["path"].get().strip()
         base = path if (vars_["personalizza"].get() and path) else default
         return base, not bool(vars_["senza_sotto"].get())
+
+    def _materiale_dir_path(self) -> str:
+        """Cartella dei file di debug (HAR/dump/log), solo modalità dev: la
+        preferenza salvata, o `DEFAULT_MATERIALE_DIR` se non impostata."""
+        return self.materiale_dir.get().strip() or DEFAULT_MATERIALE_DIR
+
+    def _apri_cartella_materiale(self):
+        """Apre in Esplora risorse la cartella dei file di debug corrente, creandola
+        se non esiste ancora (nessuna cattura fatta finora)."""
+        cartella = self._materiale_dir_path()
+        os.makedirs(cartella, exist_ok=True)
+        os.startfile(cartella)
 
     def _install_deps(self):
         """Pulsante «Installa dipendenze»: fa scegliere se installare tutto (incluso
@@ -1048,6 +1070,19 @@ class FecGui:
             ttk.Label(frm, text=f"(dev) backend: {self.backend_var.get()} · "
                                f"headless: {'on' if self.headless_var.get() else 'off'}",
                       foreground="#888").grid(row=r, column=0, columnspan=3, sticky="w", pady=(8, 0))
+
+            r += 1
+            ttk.Label(frm, text="(dev) Cartella file di debug (HAR/dump/log):").grid(
+                row=r, column=0, columnspan=3, sticky="w", pady=(6, 0))
+            r += 1
+            ttk.Entry(frm, textvariable=self.materiale_dir, width=40).grid(
+                row=r, column=1, sticky="we")
+            ttk.Button(frm, text="Sfoglia…", width=10,
+                      command=self._materiale_pick_dir).grid(row=r, column=2, padx=(6, 0))
+            r += 1
+            ttk.Button(frm, text="📂 Apri cartella", width=16,
+                      command=self._apri_cartella_materiale).grid(
+                row=r, column=1, sticky="w", pady=(2, 0))
 
         r += 1
         ttk.Label(frm, text="Le credenziali sono cifrate (cifratura leggera/portabile); "
@@ -2016,13 +2051,17 @@ class FecGui:
                    width=24).pack(side=tk.LEFT)
         ttk.Button(bar_cattura, text="🎥  Cattura HAR generico", command=self._run_capture_generico,
                    width=24).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(bar_cattura, text="📂  Apri cartella", command=self._apri_cartella_materiale,
+                   width=16).pack(side=tk.LEFT, padx=(8, 0))
         r += 1; self._note(f, r, "«Cattura login» registra solo il login e chiude il browser non "
                                  "appena completato: utile per diagnosticare il backend «Solo "
                                  "requests» quando smette di funzionare. «Cattura HAR generico» "
                                  "invece lascia il browser aperto dopo il login: naviga tu dove "
                                  "serve e chiudi il browser per salvare la registrazione. Entrambi "
-                                 "salvano in «_materiale/»; i file contengono credenziali in "
-                                 "chiaro, non condividerli.")
+                                 "salvano nella cartella file di debug (default «dev/HAR-Debug/», "
+                                 "cambiabile dalle Impostazioni - pulsante «📂 Apri cartella» sopra "
+                                 "per vederla subito); i file contengono credenziali in chiaro, non "
+                                 "condividerli.")
 
         # Strumenti investigativi sul portale Deleghe (diverso dal portale Fatture &
         # Corrispettivi): stesso schema di cattura HAR usato nella tab Utility.
@@ -2039,8 +2078,8 @@ class FecGui:
                                  "(portale.agenziaentrate.gov.it, diverso da Fatture & "
                                  "Corrispettivi). Apre il browser visibile: effettua tu il login e "
                                  "naviga fino a «Deleghe -> Elenco deleganti», poi «Esporta "
-                                 "elenco». Chiudi il browser per salvare la cattura in "
-                                 "«_materiale/».")
+                                 "elenco». Chiudi il browser per salvare la cattura nella cartella "
+                                 "file di debug («📂 Apri cartella» sopra).")
 
         self._add_help_button(tab)
 
@@ -2053,7 +2092,7 @@ class FecGui:
         if not self._validate(**{"Nome utente/CF": cf, "PIN": pin, "Password": pwd}):
             return
 
-        capture_dir = os.path.join(SCRIPT_DIR, "_materiale")
+        capture_dir = self._materiale_dir_path()
 
         def task(log):
             from ade_auth import autentica, Creds, AuthError
@@ -2065,7 +2104,8 @@ class FecGui:
                                 capture_dir=capture_dir)
             except AuthError as exc:
                 log(f"\n❌ Login fallito allo step «{exc.step}»: {exc.dettaglio}")
-                log("ℹ️  La cattura parziale potrebbe comunque essere stata salvata in «_materiale/».")
+                log("ℹ️  La cattura parziale potrebbe comunque essere stata salvata in "
+                    f"«{self._materiale_dir_path()}».")
                 return
             log(f"\n✅ Login OK - cattura completata (vedi i percorsi HAR/LOG qui sopra).")
             for n in res.note:
@@ -2082,7 +2122,7 @@ class FecGui:
         if not self._validate(**{"Nome utente/CF": cf, "PIN": pin, "Password": pwd}):
             return
 
-        capture_dir = os.path.join(SCRIPT_DIR, "_materiale")
+        capture_dir = self._materiale_dir_path()
 
         def task(log):
             from ade_auth import cattura_har_navigazione, AuthError
@@ -2095,10 +2135,10 @@ class FecGui:
                     log=log)
             except AuthError as exc:
                 log(f"\n❌ Cattura fallita allo step «{exc.step}»: {exc.dettaglio}")
-                log("ℹ️  Una cattura parziale potrebbe comunque essere in «_materiale/».")
+                log(f"ℹ️  Una cattura parziale potrebbe comunque essere in «{self._materiale_dir_path()}».")
             except Exception as exc:
                 log(f"\n❌ Cattura fallita: {exc}")
-                log("ℹ️  Una cattura parziale potrebbe comunque essere in «_materiale/».")
+                log(f"ℹ️  Una cattura parziale potrebbe comunque essere in «{self._materiale_dir_path()}».")
 
         self._run_inprocess(task)
 
@@ -2109,7 +2149,7 @@ class FecGui:
         if not self._validate(**{"Nome utente/CF": cf, "PIN": pin, "Password": pwd}):
             return
 
-        capture_dir = os.path.join(SCRIPT_DIR, "_materiale")
+        capture_dir = self._materiale_dir_path()
 
         def task(log):
             from ade_auth import cattura_har_navigazione, AuthError
@@ -2123,10 +2163,10 @@ class FecGui:
                     log=log)
             except AuthError as exc:
                 log(f"\n❌ Cattura fallita allo step «{exc.step}»: {exc.dettaglio}")
-                log("ℹ️  Una cattura parziale potrebbe comunque essere in «_materiale/».")
+                log(f"ℹ️  Una cattura parziale potrebbe comunque essere in «{self._materiale_dir_path()}».")
             except Exception as exc:
                 log(f"\n❌ Cattura fallita: {exc}")
-                log("ℹ️  Una cattura parziale potrebbe comunque essere in «_materiale/».")
+                log(f"ℹ️  Una cattura parziale potrebbe comunque essere in «{self._materiale_dir_path()}».")
 
         self._run_inprocess(task)
 
@@ -2248,6 +2288,7 @@ class FecGui:
         ("data_fine_delega", "Fine delega", 90),
         ("conservazione", "Conserv.", 70),
         ("codice_destinatario", "Canale ricezione", 150),
+        ("canale_massivo", "Canale forniture massive", 200),
         ("etichetta1", "Etichetta 1", 110),
         ("etichetta2", "Etichetta 2", 110),
     )
@@ -2260,7 +2301,7 @@ class FecGui:
     _SEL_OFF = "☐"
 
     # Colonne con filtro a tendina tipo Excel sull'intestazione (invece dell'ordinamento).
-    _DELEGHE_COL_FILTRO = ("conservazione", "codice_destinatario")
+    _DELEGHE_COL_FILTRO = ("conservazione", "codice_destinatario", "canale_massivo")
     # Indicatore di filtro attivo aggiunto all'intestazione della colonna.
     _FILTRO_ON = " ▾"
 
@@ -2336,8 +2377,9 @@ class FecGui:
                                   command=self._deleghe_toggle_all)
         self.deleghe_tree.column("_sel", width=34, minwidth=34, anchor="center", stretch=False)
         for key, label, width in self._DELEGHE_COLS:
-            # «Conservazione» e «Canale ricezione» hanno un filtro a tendina tipo Excel
-            # sull'intestazione; le altre colonne ordinano al click.
+            # «Conservazione», «Canale ricezione» e «Canale forniture massive» hanno un
+            # filtro a tendina tipo Excel sull'intestazione; le altre colonne ordinano al
+            # click.
             if key in self._DELEGHE_COL_FILTRO:
                 cmd = lambda k=key: self._deleghe_apri_filtro_colonna(k)
             else:
@@ -2369,6 +2411,7 @@ class FecGui:
         self.dlg_fine  = tk.StringVar()
         self.dlg_dest  = tk.StringVar()
         self.dlg_pec   = tk.StringVar()
+        self.dlg_canale_massivo = tk.StringVar()
         self.dlg_et1   = tk.StringVar()
         self.dlg_et2   = tk.StringVar()
         self.dlg_cons  = tk.BooleanVar(value=False)
@@ -2396,6 +2439,7 @@ class FecGui:
 
         self._row(inner, 0, "Codice destinatario:", self.dlg_dest, width=30, col=2)
         self._row(inner, 1, "PEC:", self.dlg_pec, width=30, col=2)
+        self._row(inner, 4, "Canale forniture massive:", self.dlg_canale_massivo, width=30, col=2)
         self.dlg_et1_label = ttk.Label(inner, text=self.deleghe_etichette["campo1"] + ":")
         self.dlg_et1_label.grid(row=2, column=2, sticky="w", pady=4, padx=(24, 8))
         ttk.Entry(inner, textvariable=self.dlg_et1, width=30).grid(row=2, column=3, sticky="w")
@@ -2524,7 +2568,8 @@ class FecGui:
         if q:
             campi = (row.get("denominazione", ""), row.get("codice_fiscale", ""),
                     row.get("partita_iva", ""), row.get("codice_destinatario", ""),
-                    row.get("pec", ""), row.get("etichetta1", ""), row.get("etichetta2", ""))
+                    row.get("pec", ""), row.get("canale_massivo", ""),
+                    row.get("etichetta1", ""), row.get("etichetta2", ""))
             if not any(q in str(c).lower() for c in campi):
                 return False
         f1 = self.deleghe_filtro1.get()
@@ -2622,6 +2667,11 @@ class FecGui:
                                 scegli_piva=self._chiedi_piva_thread)
             except AuthError as exc:
                 log(f"\n❌ Login fallito allo step «{exc.step}»: {exc.dettaglio}")
+                if self._e_delega_non_valida(exc.dettaglio):
+                    riga = next((r for r in self.deleghe_rows
+                                if r.get("codice_fiscale", "").upper() == cfcl.upper()), None)
+                    if riga:
+                        self.root.after(0, lambda r=riga: self._deleghe_gestisci_non_trovate([r]))
                 return
             dati = fec_anagrafica.recupera(res, log=log)
             self._applica_aggiornamento_delega(cfcl, dati, log)
@@ -2686,6 +2736,7 @@ class FecGui:
             auth = None
             aggiornate = 0
             falliti = []
+            non_trovate = []
             interrotto = False
             for i, row in enumerate(righe, 1):
                 try:
@@ -2710,6 +2761,8 @@ class FecGui:
                 except AuthError as exc:
                     log(f"   ❌ accesso/utenza: {exc.dettaglio}")
                     falliti.append(cfcl)
+                    if self._e_delega_non_valida(exc.dettaglio):
+                        non_trovate.append(row)
                     continue
                 try:
                     dati = fec_anagrafica.recupera(auth)
@@ -2735,8 +2788,136 @@ class FecGui:
             stato = "Interrotto" if interrotto else "Completato"
             log(f"\n[{stato}] {aggiornate} aggiornate, {len(falliti)} non riuscite"
                 + (f" ({', '.join(falliti)})" if falliti else "."))
+            if non_trovate:
+                self.root.after(0, lambda rows=non_trovate: self._deleghe_gestisci_non_trovate(rows))
 
         self._run_inprocess(task)
+
+    # Messaggi testuali con cui l'API di instradamento segnala che la delega non è
+    # più valida (scaduta/revocata): non c'è un codice errore dedicato, solo testo
+    # libero nel campo `error` della risposta (vedi `_setuserchoice` in ade_auth.py).
+    _MSG_DELEGA_NON_VALIDA = ("delegante non trovato",
+                              "utenza di lavoro non valida o non autorizzata")
+
+    @classmethod
+    def _e_delega_non_valida(cls, dettaglio: str) -> bool:
+        """True se l'errore di scelta utenza indica che la delega non è più valida
+        su AdE (scaduta o revocata dal cliente), non un errore di rete/credenziali."""
+        d = (dettaglio or "").lower()
+        return any(msg in d for msg in cls._MSG_DELEGA_NON_VALIDA)
+
+    def _dialog_deleghe_non_valide(self, rows: list[dict]) -> bool:
+        """
+        Dialogo di conferma per `_deleghe_gestisci_non_trovate`: un elenco lungo (anche
+        80+ righe) mandava in overflow il `messagebox.askyesno` nativo, spingendo i
+        pulsanti Sì/No fuori dallo schermo (la finestra di sistema cresce col testo,
+        non è scorrevole). Qui l'elenco sta in una lista scorrevole ad altezza fissa e i
+        pulsanti restano sempre visibili in basso. Ritorna True se l'utente conferma.
+        """
+        n = len(rows)
+        win = tk.Toplevel(self.root)
+        win.title("Deleghe non più valide")
+        win.transient(self.root)
+        win.grab_set()
+        win.geometry("580x440")
+        win.minsize(420, 280)
+
+        frm = ttk.Frame(win, padding=(16, 14))
+        frm.pack(fill=tk.BOTH, expand=True)
+        frm.rowconfigure(1, weight=1)
+        frm.columnconfigure(0, weight=1)
+
+        ttk.Label(frm, text=f"AdE non riconosce più {n} delega{'' if n == 1 else 'e'}:",
+                  wraplength=530, justify="left").grid(row=0, column=0, sticky="w", pady=(0, 8))
+
+        box = ttk.Frame(frm)
+        box.grid(row=1, column=0, sticky="nsew")
+        box.rowconfigure(0, weight=1)
+        box.columnconfigure(0, weight=1)
+        elenco = tk.Text(box, wrap="none", height=10, borderwidth=1, relief="solid")
+        vsb = ttk.Scrollbar(box, orient="vertical", command=elenco.yview)
+        elenco.configure(yscrollcommand=vsb.set)
+        elenco.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        for r in rows:
+            elenco.insert(tk.END, f"- {r.get('denominazione') or '(senza denominazione)'} "
+                                  f"(CF {r.get('codice_fiscale', '')})\n")
+        elenco.configure(state="disabled")
+
+        ttk.Label(frm, text="La delega non risulta più attiva su AdE (probabilmente scaduta "
+                            "o revocata dal cliente). Rimuoverle dall'anagrafica locale?",
+                  wraplength=530, justify="left").grid(row=2, column=0, sticky="w", pady=(8, 10))
+
+        risposta = {"conferma": False}
+
+        def _conferma():
+            risposta["conferma"] = True
+            win.destroy()
+
+        barra = ttk.Frame(frm)
+        barra.grid(row=3, column=0, sticky="e")
+        ttk.Button(barra, text="No", command=win.destroy, width=12).pack(
+            side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(barra, text="Sì, rimuovi", command=_conferma, width=14).pack(side=tk.RIGHT)
+
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
+        win.bind("<Escape>", lambda _e: win.destroy())
+        win.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_width()) // 2
+        y = self.root.winfo_rooty() + 40
+        win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+
+        win.wait_window()
+        return risposta["conferma"]
+
+    def _deleghe_gestisci_non_trovate(self, rows: list[dict]):
+        """
+        Popup mostrato (thread Tk) dopo un aggiornamento da AdE quando una o più
+        deleghe risultano non più valide (vedi `_MSG_DELEGA_NON_VALIDA`: delegante non
+        trovato, o utenza di lavoro non valida/non autorizzata - stessa condizione,
+        messaggio AdE diverso a seconda del punto del flusso in cui viene rifiutata).
+        Propone di rimuoverle dall'anagrafica locale e, se confermato, di salvare un
+        elenco .txt (denominazione/CF/P.IVA) per la richiesta di rinnovo al cliente.
+        """
+        n = len(rows)
+        if not self._dialog_deleghe_non_valide(rows):
+            return
+        cf_da_rimuovere = {str(r.get("codice_fiscale", "")).upper() for r in rows}
+        self.deleghe_rows = [r for r in self.deleghe_rows
+                             if str(r.get("codice_fiscale", "")).upper() not in cf_da_rimuovere]
+        self._deleghe.save_deleghe(self.deleghe_rows)
+        self._deleghe_reload()
+        self._log(f"🗑️  Rimosse {n} delega{'' if n == 1 else 'e'} non più valide.")
+
+        if messagebox.askyesno(
+                "Salva elenco",
+                "Vuoi salvare un file .txt con le deleghe rimosse (denominazione, CF, "
+                "P.IVA) per il controllo e la richiesta di rinnovo delega al cliente?"):
+            self._deleghe_salva_txt_rimosse(rows)
+
+    def _deleghe_salva_txt_rimosse(self, rows: list[dict]):
+        """Salva un file .txt (';'-separated, come le altre esportazioni dell'app)
+        con denominazione/CF/P.IVA delle deleghe appena rimosse."""
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = filedialog.asksaveasfilename(
+            title="Salva elenco deleghe rimosse",
+            initialdir=self.std_destdir.get().strip() or DEFAULT_DEST_DIR,
+            initialfile=f"deleghe_da_rinnovare_{ts}.txt",
+            defaultextension=".txt",
+            filetypes=[("File di testo", "*.txt"), ("Tutti i file", "*.*")])
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8-sig") as fh:
+                fh.write("Denominazione;Codice fiscale;Partita IVA\n")
+                for r in rows:
+                    fh.write(f"{r.get('denominazione', '')};{r.get('codice_fiscale', '')};"
+                            f"{r.get('partita_iva', '')}\n")
+        except Exception as exc:
+            messagebox.showerror("Salvataggio fallito", str(exc))
+            return
+        self._log(f"💾 Elenco deleghe rimosse salvato in {path}")
 
     def _applica_aggiornamento_delega(self, cf: str, dati: dict, log):
         """
@@ -3012,13 +3193,14 @@ class FecGui:
         self.dlg_fine.set(row.get("data_fine_delega", ""))
         self.dlg_dest.set(row.get("codice_destinatario", ""))
         self.dlg_pec.set(row.get("pec", ""))
+        self.dlg_canale_massivo.set(row.get("canale_massivo", ""))
         self.dlg_et1.set(row.get("etichetta1", ""))
         self.dlg_et2.set(row.get("etichetta2", ""))
         self.dlg_cons.set(bool(row.get("conservazione")))
 
     def _deleghe_clear_form(self):
         for v in (self.dlg_denom, self.dlg_cf, self.dlg_piva, self.dlg_fine, self.dlg_dest,
-                  self.dlg_pec, self.dlg_et1, self.dlg_et2):
+                  self.dlg_pec, self.dlg_canale_massivo, self.dlg_et1, self.dlg_et2):
             v.set("")
         self.dlg_cons.set(False)
         if self.deleghe_tree.selection():
@@ -3037,6 +3219,7 @@ class FecGui:
             "conservazione": self.dlg_cons.get(),
             "codice_destinatario": self.dlg_dest.get(),
             "pec": self.dlg_pec.get(),
+            "canale_massivo": self.dlg_canale_massivo.get(),
             "etichetta1": self.dlg_et1.get(),
             "etichetta2": self.dlg_et2.get(),
         }
@@ -3143,7 +3326,7 @@ class FecGui:
     def _deleghe_import_ade(self):
         path = filedialog.askopenfilename(
             title="Seleziona il CSV «Elenco deleganti» esportato dall'AdE",
-            initialdir=os.path.join(SCRIPT_DIR, "_materiale"),
+            initialdir=self._materiale_dir_path(),
             filetypes=[("CSV", "*.csv"), ("Tutti i file", "*.*")])
         if not path:
             return
@@ -3317,6 +3500,13 @@ class FecGui:
             initialdir=self.std_destdir.get().strip() or DEFAULT_DEST_DIR)
         if scelta:
             self.std_destdir.set(scelta)
+
+    def _materiale_pick_dir(self):
+        scelta = filedialog.askdirectory(
+            title="Cartella dei file di debug (HAR/dump/log)",
+            initialdir=self._materiale_dir_path())
+        if scelta:
+            self.materiale_dir.set(scelta)
 
     def _std_filtro_controparte_changed(self):
         if self.std_filtro_controparte.get():
@@ -4176,14 +4366,15 @@ class FecGui:
         self.util_formato.trace_add("write", _toggle_formato)
         _toggle_formato()
 
-        # Strumenti di debug (dump/HAR/log in «_materiale/», fuori da Git): solo DEV_MODE,
-        # non servono all'uso normale dell'app e non vanno nella GUI pubblica.
+        # Strumenti di debug (dump/HAR/log nella cartella file di debug, fuori da Git):
+        # solo DEV_MODE, non servono all'uso normale dell'app e non vanno nella GUI pubblica.
         if DEV_MODE:
             r += 1
             ttk.Separator(f, orient="horizontal").grid(row=r, column=0, columnspan=2,
                                                        sticky="ew", pady=(10, 2))
             r += 1
-            ttk.Label(f, text="Debug (file salvati in «_materiale/»):").grid(
+            ttk.Label(f, text="Debug (file salvati nella cartella file di debug, "
+                              "configurabile in Impostazioni):").grid(
                 row=r, column=0, columnspan=2, sticky="w", pady=(2, 2))
             r += 1
             bar = ttk.Frame(f)
@@ -4194,6 +4385,8 @@ class FecGui:
                       command=self._run_utility_har).pack(side=tk.LEFT, padx=8)
             ttk.Button(bar, text="💾 Salva log console", width=20,
                       command=self._salva_log_console).pack(side=tk.LEFT)
+            ttk.Button(bar, text="📂 Apri cartella", width=16,
+                      command=self._apri_cartella_materiale).pack(side=tk.LEFT, padx=8)
             r += 1; self._note(f, r, "Dump = lista JSON del periodo + dettaglio della 1ª fattura "
                                      "(per confermare i nomi campo). Cattura HAR = browser visibile "
                                      "con registrazione: naviga tu (login, Fatture, Corrispettivi...) "
@@ -4285,8 +4478,8 @@ class FecGui:
         return periodi
 
     def _run_utility_dump(self):
-        """Debug: salva in _materiale/ la lista JSON del periodo e il dettaglio
-        della prima fattura (per confermare i nomi campo del parser)."""
+        """Debug: salva nella cartella file di debug la lista JSON del periodo e il
+        dettaglio della prima fattura (per confermare i nomi campo del parser)."""
         cf, pin, pwd, cfst = self._get_creds()
         cfcl = self.util_cfcl.get().strip()
         piva = self.util_piva.get().strip()
@@ -4298,13 +4491,13 @@ class FecGui:
                               **{"CF Cliente": cfcl},
                               **{"Data inizio": dal}, **{"Data fine": al}):
             return
-        materiale = os.path.join(SCRIPT_DIR, "_materiale")
+        materiale = self._materiale_dir_path()
 
         def op(res, log, fq, ctrl, prog):
             import fec_utility
             fec_utility.dump_json_esempio(res, tipo, dal, al,
                                           dest_dir=materiale, log=log)
-            log("⚠️  I dump contengono dati reali: restano in «_materiale/» (fuori da Git).")
+            log(f"⚠️  I dump contengono dati reali: restano in «{materiale}» (fuori da Git).")
 
         self._esegui_in_process(cfcl, piva, _profilo_da_modalita(self.modalita.get()),
             f"Dump JSON {tipo}", op)
@@ -4315,7 +4508,7 @@ class FecGui:
         cf, pin, pwd, cfst = self._get_creds()
         if not self._validate(**{"Nome utente/CF": cf, "PIN": pin, "Password": pwd}):
             return
-        materiale = os.path.join(SCRIPT_DIR, "_materiale")
+        materiale = self._materiale_dir_path()
 
         def task(log):
             import fec_utility
@@ -4326,14 +4519,14 @@ class FecGui:
                                               capture_dir=materiale, log=log)
             except Exception as exc:
                 log(f"\n❌ Cattura fallita: {exc}")
-                log("ℹ️  Una cattura parziale potrebbe comunque essere in «_materiale/».")
+                log(f"ℹ️  Una cattura parziale potrebbe comunque essere in «{materiale}».")
 
         self._run_inprocess(task)
 
     def _salva_log_console(self):
-        """Debug: salva il contenuto attuale della console in _materiale/."""
+        """Debug: salva il contenuto attuale della console nella cartella file di debug."""
         from datetime import datetime
-        materiale = os.path.join(SCRIPT_DIR, "_materiale")
+        materiale = self._materiale_dir_path()
         os.makedirs(materiale, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         percorso = os.path.join(materiale, f"console_{ts}.log")

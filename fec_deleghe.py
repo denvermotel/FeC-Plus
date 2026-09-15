@@ -45,12 +45,14 @@ DELEGHE_FILE = os.path.join(SCRIPT_DIR, "fec_deleghe.json")
 
 # Schema riga della tabella deleghe. `conservazione` è un bool; gli altri sono stringhe.
 # `codice_destinatario` e `pec` sono i due canali (mutuamente esclusivi) di ricezione delle
-# fatture elettroniche: si mostra quello valorizzato. `etichetta1`/`etichetta2` sono due campi
-# liberi a disposizione dell'utente per taggare l'anagrafica; i loro NOMI visualizzati sono
-# una preferenza di GUI salvata in fec_settings.json (non qui).
+# fatture elettroniche: si mostra quello valorizzato. `canale_massivo` è il riepilogo dei
+# provider censiti per lo scarico massivo (fatture/corrispettivi/bollo/IVA precompilata)
+# senza passare dal portale. `etichetta1`/`etichetta2` sono due campi liberi a disposizione
+# dell'utente per taggare l'anagrafica; i loro NOMI visualizzati sono una preferenza di GUI
+# salvata in fec_settings.json (non qui).
 FIELDS = ("denominazione", "codice_fiscale", "partita_iva",
           "data_fine_delega", "conservazione", "codice_destinatario",
-          "pec", "etichetta1", "etichetta2")
+          "pec", "canale_massivo", "etichetta1", "etichetta2")
 
 # ── Match servizi nel CSV AdE (sottostringhe, facili da aggiornare) ───────────
 # Delega che abilita lo scarico delle fatture da Fatture & Corrispettivi.
