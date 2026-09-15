@@ -1,0 +1,255 @@
+{
+  "lista": [
+    {
+      "idRichiesta": "ID000000000000001",
+      "progRichiesta": "1",
+      "tipoDelega": "UV",
+      "cfDelegante": "CFDELEG000010",
+      "denomDelegante": "Delegante Anonimo 1",
+      "cfDelegato": "01820310819",
+      "servizi": [
+        {
+          "idServizio": "M05",
+          "descrizione": "Consultazione del cassetto fiscale delegato",
+          "servizio": "CAFIS"
+        }
+      ],
+      "dataInizioDel": "23/11/2023",
+      "dataFineDel": "23/11/2027",
+      "stato": "0",
+      "desStato": "Attiva",
+      "dataStato": "23/11/2023",
+      "provenienza": "U",
+      "dataDelega": "",
+      "altroIntermediario": false
+    },
+    {
+      "idRichiesta": "ID000000000000002",
+      "progRichiesta": "2",
+      "tipoDelega": "UN",
+      "cfDelegante": "CFDELEG000020",
+      "denomDelegante": "Delegante Anonimo 2",
+      "cfDelegato": "01820310819",
+      "denomDelegato": "Studio Anonimo",
+      "servizi": [
+        {
+          "idServizio": "I31",
+          "descrizione": "Fatturazione elettronica e conservazione delle fatture elettroniche",
+          "servizio": "FAI31"
+        },
+        {
+          "idServizio": "I34",
+          "descrizione": "Accreditamento e censimento dispositivi",
+          "servizio": "FAI34"
+        },
+        {
+          "idServizio": "I38",
+          "descrizione": "Consultazione dei dati rilevanti ai fini IVA",
+          "servizio": "FAI38"
+        },
+        {
+          "idServizio": "I42",
+          "descrizione": "Consultazione e acquisizione delle fatture elettroniche o dei loro duplicati informatici",
+          "servizio": "FAI42"
+        },
+        {
+          "idServizio": "I44",
+          "descrizione": "Registrazione dell'indirizzo telematico",
+          "servizio": "FAI44"
+        },
+        {
+          "idServizio": "M05",
+          "descrizione": "Consultazione del cassetto fiscale delegato",
+          "servizio": "CAFIS"
+        },
+        {
+          "idServizio": "M14",
+          "descrizione": "Servizi on line dell'Agenzia delle entrate-Riscossione",
+          "servizio": "ADERW"
+        }
+      ],
+      "dataInizioDel": "07/03/2026",
+      "dataFineDel": "31/12/2030",
+      "stato": "0",
+      "desStato": "Attiva",
+      "dataStato": "07/03/2026",
+      "provenienza": "F",
+      "dataDelega": "07/03/2026",
+      "tipoDataDelega": "INS",
+      "altroIntermediario": false
+    },
+    {
+      "tipoDelega": "CE",
+      "cfDelegante": "CFDELEG000030",
+      "cfDelegato": "01820310819",
+      "servizi": [],
+      "dataInizioDel": "31/10/2023",
+      "dataFineDel": "07/06/10007",
+      "stato": "0",
+      "desStato": "Attiva",
+      "dataStato": "31/10/2023",
+      "dataDelega": "",
+      "altroIntermediario": false,
+      "denomDelegante": "Delegante Anonimo 3",
+      "idRichiesta": "ID000000000000003"
+    },
+    {
+      "idRichiesta": "ID000000000000004",
+      "progRichiesta": "1",
+      "tipoDelega": "UV",
+      "cfDelegante": "CFDELEG000040",
+      "cfDelegato": "01820310819",
+      "denomDelegato": "Studio Anonimo",
+      "servizi": [
+        {
+          "idServizio": "I42",
+          "descrizione": "Consultazione e acquisizione delle fatture elettroniche o dei loro duplicati informatici",
+          "servizio": "FAI42"
+        }
+      ],
+      "dataInizioDel": "22/10/2025",
+      "dataFineDel": "22/10/2027",
+      "stato": "0",
+      "desStato": "Attiva",
+      "dataStato": "22/10/2025",
+      "provenienza": "M",
+      "dataDelega": "",
+      "altroIntermediario": false,
+      "denomDelegante": "Delegante Anonimo 4"
+    },
+    {
+      "idRichiesta": "ID000000000000004",
+      "progRichiesta": "1",
+      "tipoDelega": "UV",
+      "cfDelegante": "CFDELEG000040",
+      "cfDelegato": "01820310819",
+      "denomDelegato": "Studio Anonimo",
+      "servizi": [
+        {
+          "idServizio": "I31",
+          "descrizione": "Fatturazione elettronica e conservazione delle fatture elettroniche",
+          "servizio": "FAI31"
+        }
+      ],
+      "dataInizioDel": "22/10/2025",
+      "dataFineDel": "01/01/2099",
+      "stato": "0",
+      "desStato": "Attiva",
+      "dataStato": "22/10/2025",
+      "provenienza": "M",
+      "dataDelega": "",
+      "altroIntermediario": false,
+      "denomDelegante": "Delegante Anonimo 4"
+    },
+    {
+      "idRichiesta": "ID000000000000002",
+      "progRichiesta": "2",
+      "tipoDelega": "UN",
+      "cfDelegante": "CFDELEG000020",
+      "denomDelegante": "Delegante Anonimo 2",
+      "cfDelegato": "01820310819",
+      "denomDelegato": "Studio Anonimo",
+      "servizi": [
+        {
+          "idServizio": "I31",
+          "descrizione": "Fatturazione elettronica e conservazione delle fatture elettroniche",
+          "servizio": "FAI31"
+        },
+        {
+          "idServizio": "I34",
+          "descrizione": "Accreditamento e censimento dispositivi",
+          "servizio": "FAI34"
+        },
+        {
+          "idServizio": "I38",
+          "descrizione": "Consultazione dei dati rilevanti ai fini IVA",
+          "servizio": "FAI38"
+        },
+        {
+          "idServizio": "I42",
+          "descrizione": "Consultazione e acquisizione delle fatture elettroniche o dei loro duplicati informatici",
+          "servizio": "FAI42"
+        },
+        {
+          "idServizio": "I44",
+          "descrizione": "Registrazione dell'indirizzo telematico",
+          "servizio": "FAI44"
+        },
+        {
+          "idServizio": "M05",
+          "descrizione": "Consultazione del cassetto fiscale delegato",
+          "servizio": "CAFIS"
+        },
+        {
+          "idServizio": "M14",
+          "descrizione": "Servizi on line dell'Agenzia delle entrate-Riscossione",
+          "servizio": "ADERW"
+        }
+      ],
+      "dataInizioDel": "01/01/2022",
+      "dataFineDel": "31/12/2030",
+      "stato": "0",
+      "desStato": "Attiva",
+      "dataStato": "07/03/2026",
+      "provenienza": "F",
+      "dataDelega": "07/03/2026",
+      "tipoDataDelega": "INS",
+      "altroIntermediario": false
+    },
+    {
+      "idRichiesta": "ID000000000000002",
+      "progRichiesta": "2",
+      "tipoDelega": "UN",
+      "cfDelegante": "CFDELEG000020",
+      "denomDelegante": "Delegante Anonimo 2",
+      "cfDelegato": "01820310819",
+      "denomDelegato": "Studio Anonimo",
+      "servizi": [
+        {
+          "idServizio": "I31",
+          "descrizione": "Fatturazione elettronica e conservazione delle fatture elettroniche",
+          "servizio": "FAI31"
+        },
+        {
+          "idServizio": "I34",
+          "descrizione": "Accreditamento e censimento dispositivi",
+          "servizio": "FAI34"
+        },
+        {
+          "idServizio": "I38",
+          "descrizione": "Consultazione dei dati rilevanti ai fini IVA",
+          "servizio": "FAI38"
+        },
+        {
+          "idServizio": "I42",
+          "descrizione": "Consultazione e acquisizione delle fatture elettroniche o dei loro duplicati informatici",
+          "servizio": "FAI42"
+        },
+        {
+          "idServizio": "I44",
+          "descrizione": "Registrazione dell'indirizzo telematico",
+          "servizio": "FAI44"
+        },
+        {
+          "idServizio": "M05",
+          "descrizione": "Consultazione del cassetto fiscale delegato",
+          "servizio": "CAFIS"
+        },
+        {
+          "idServizio": "M14",
+          "descrizione": "Servizi on line dell'Agenzia delle entrate-Riscossione",
+          "servizio": "ADERW"
+        }
+      ],
+      "dataInizioDel": "01/09/2026",
+      "dataFineDel": "31/12/2030",
+      "stato": "0",
+      "desStato": "Attiva",
+      "dataStato": "07/03/2026",
+      "provenienza": "F",
+      "dataDelega": "07/03/2026",
+      "tipoDataDelega": "INS",
+      "altroIntermediario": false
+    }
+  ]
+}
