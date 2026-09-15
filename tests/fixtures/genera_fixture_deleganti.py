@@ -109,6 +109,14 @@ def main():
     recente["dataInizioDel"] = "01/09/2026"
     aggiungi(recente)
 
+    # Un CF rilevante isolato, con SOLO data vecchia (nessun record recente per lo
+    # stesso CF): serve a verificare che il filtro soglia_data esclude davvero un
+    # CF intero quando nessuno dei suoi record supera la soglia.
+    vecchio_isolato = dict(un_rilevante)
+    vecchio_isolato["cfDelegante"] = "CFTEST_ISOLATO_001"  # CF fittizio univoco, mai visto altrove nel campione originale
+    vecchio_isolato["dataInizioDel"] = "01/01/2022"
+    aggiungi(vecchio_isolato)
+
     with open(_OUT, "w", encoding="utf-8") as fh:
         json.dump({"lista": campione}, fh, indent=2, ensure_ascii=False)
     print(f"Fixture scritta: {_OUT} ({len(campione)} record).")
