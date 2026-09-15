@@ -5,6 +5,7 @@
 import json
 import os
 import unittest
+from unittest.mock import MagicMock
 
 import fec_deleghe_sync as sync
 
@@ -77,6 +78,75 @@ class TestElaboraDeleganti(unittest.TestCase):
     def test_denominazione_presente_nella_riga(self):
         righe = sync.elabora_deleganti(self.lista)
         self.assertTrue(all(r["denominazione"] for r in righe))
+
+
+class _RispostaFinta:
+    def __init__(self, status_code, json_data=None, text=""):
+        self.status_code = status_code
+        self._json_data = json_data
+        self.text = text
+
+    def json(self):
+        if self._json_data is None:
+            raise ValueError("no json")
+        return self._json_data
+
+
+class TestFetchDelegantiRaw(unittest.TestCase):
+    def _auth_finto(self, risposte_per_url):
+        """risposte_per_url: dict che mappa una sottostringa dell'URL a una
+        _RispostaFinta; il primo match (in ordine di inserimento) vince."""
+        session = MagicMock()
+
+        def get(url, **kwargs):
+            for frammento, risposta in risposte_per_url.items():
+                if frammento in url:
+                    return risposta
+            raise AssertionError(f"GET non atteso: {url}")
+
+        def post(url, **kwargs):
+            for frammento, risposta in risposte_per_url.items():
+                if frammento in url:
+                    return risposta
+            raise AssertionError(f"POST non atteso: {url}")
+
+        session.get.side_effect = get
+        session.post.side_effect = post
+        auth = MagicMock()
+        auth.session = session
+        return auth
+
+    def test_fetch_ok_ritorna_lista_grezza(self):
+        lista = [{"cfDelegante": "X"}]
+        auth = self._auth_finto({
+            "PortaleWeb/home": _RispostaFinta(200, text="<html></html>"),
+            "initPortale": _RispostaFinta(200, text="{}"),
+            "initLight": _RispostaFinta(200, text=""),
+            "delegheUniche/deleganti": _RispostaFinta(200, {"lista": lista}),
+        })
+        risultato = sync.fetch_deleganti_raw(auth, log=lambda _m: None)
+        self.assertEqual(risultato, lista)
+
+    def test_fetch_403_solleva_sincronizzazione_bloccata(self):
+        auth = self._auth_finto({
+            "PortaleWeb/home": _RispostaFinta(200, text="<html></html>"),
+            "initPortale": _RispostaFinta(200, text="{}"),
+            "initLight": _RispostaFinta(200, text=""),
+            "delegheUniche/deleganti": _RispostaFinta(
+                403, text="<H1>Access Denied</H1>"),
+        })
+        with self.assertRaises(sync.SincronizzazioneBloccata):
+            sync.fetch_deleganti_raw(auth, log=lambda _m: None)
+
+    def test_fetch_risposta_senza_campo_lista_solleva_errore(self):
+        auth = self._auth_finto({
+            "PortaleWeb/home": _RispostaFinta(200, text="<html></html>"),
+            "initPortale": _RispostaFinta(200, text="{}"),
+            "initLight": _RispostaFinta(200, text=""),
+            "delegheUniche/deleganti": _RispostaFinta(200, {"errore": "boh"}),
+        })
+        with self.assertRaises(sync.SincronizzazioneBloccata):
+            sync.fetch_deleganti_raw(auth, log=lambda _m: None)
 
 
 if __name__ == "__main__":

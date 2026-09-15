@@ -21,11 +21,23 @@ from __future__ import annotations
 __version__ = "0.04 dev"
 
 from datetime import datetime
+import requests
 
 # Codici servizio rilevanti per Fatture&Corrispettivi (vedi fec_deleghe.SERVIZIO_FATTURE
 # per il vecchio filtro testuale sul CSV): I42 = consultazione/acquisizione fatture,
 # I31 = fatturazione elettronica e conservazione.
 SERVIZI_RILEVANTI = ("I42", "I31")
+
+PORTALE = "https://portale.agenziaentrate.gov.it"
+APPTEL = "https://apptel.agenziaentrate.gov.it"
+DELEGANTI_URL = f"{APPTEL}/deleghe-portale-rest/rs/delegheUniche/deleganti"
+
+# Valore osservato in una cattura HAR reale del 2026-09-15: come X_APPL_DEFAULT in
+# ade_auth.py, può cambiare a un redeploy AdE - in tal caso va ricatturato un HAR
+# (pulsante Test Login -> "Cattura HAR generico", navigando fino al portale Deleghe).
+X_APPL_DELEGHE_DEFAULT = "ad9ff8e015bfc8c2737e6ea0c5299518485b811"
+
+_HTTP_TIMEOUT = (15, 60)
 
 
 def _parse_data_it(s: str):
@@ -83,3 +95,78 @@ def elabora_deleganti(lista_grezza: list[dict], *, soglia_data: str = "") -> lis
         "denominazione": dati["denominazione"],
         "data_fine_delega": dati["fine"].strftime("%d/%m/%Y") if dati["fine"] else "",
     } for cf, dati in aggregati.items()]
+
+
+def _unix_time() -> str:
+    import time
+    return str(int(time.time() * 1000))
+
+
+def _headers_apptel() -> dict:
+    return {
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json",
+        "Origin": PORTALE,
+        "Referer": f"{PORTALE}/",
+        "x-appl": X_APPL_DELEGHE_DEFAULT,
+    }
+
+
+class SincronizzazioneBloccata(RuntimeError):
+    """Il fetch via requests è stato rifiutato (probabile blocco anti-bot Akamai
+    sul dominio apptel/portale-rest) o ha risposto in una forma inattesa."""
+
+
+def _bootstrap_portale(session: requests.Session, log) -> None:
+    """Visita le pagine che, per il portale Deleghe, impostano i cookie di sessione
+    necessari (stesso pattern già noto per ivaservizi in ade_auth: la prima
+    initPortale può rispondere 501 ma imposta comunque i cookie)."""
+    session.get(f"{PORTALE}/PortaleWeb/home?to=FATBTB", verify=False,
+               timeout=_HTTP_TIMEOUT)
+    for _ in range(2):
+        r = session.get(f"{PORTALE}/portale-rest/rs/initPortale?v={_unix_time()}",
+                        verify=False, timeout=_HTTP_TIMEOUT)
+        if r.status_code == 200:
+            break
+    log("Bootstrap portale Deleghe completato.")
+
+
+def fetch_deleganti_raw(auth, *, log=print) -> list[dict]:
+    """
+    Tenta di ottenere l'elenco grezzo delle deleghe (tutti i servizi, non solo
+    Fatture&Corrispettivi - vedi SERVIZI_RILEVANTI/elabora_deleganti per il
+    filtro) riusando la sessione `requests` già autenticata in `auth.session`
+    (funziona con qualunque backend di login: entrambi producono un
+    `requests.Session`).
+
+    Solleva `SincronizzazioneBloccata` se una qualunque chiamata risponde in modo
+    inatteso (status diverso da 200, corpo non JSON, campo "lista" assente) - il
+    chiamante decide se ripiegare sul backend browser (vedi `sincronizza`).
+    """
+    session = auth.session
+    try:
+        _bootstrap_portale(session, log)
+        session.get(f"{APPTEL}/deleghe-portale-rest/rs/initLight?v={_unix_time()}",
+                   headers=_headers_apptel(), verify=False, timeout=_HTTP_TIMEOUT)
+        r = session.post(f"{DELEGANTI_URL}?v={_unix_time()}",
+                        headers=_headers_apptel(), data='{"stato":"A"}',
+                        verify=False, timeout=_HTTP_TIMEOUT)
+    except requests.RequestException as exc:
+        raise SincronizzazioneBloccata(f"Errore di rete: {exc}") from exc
+
+    if r.status_code != 200:
+        raise SincronizzazioneBloccata(
+            f"Il portale ha risposto HTTP {r.status_code} (probabile blocco "
+            "anti-bot): serve il backend browser per questa operazione.")
+    try:
+        dati = r.json()
+    except ValueError as exc:
+        raise SincronizzazioneBloccata(
+            "Risposta non in formato JSON (probabile pagina di blocco anti-bot "
+            "invece dei dati).") from exc
+    lista = dati.get("lista") if isinstance(dati, dict) else None
+    if lista is None:
+        raise SincronizzazioneBloccata(
+            "La risposta non contiene il campo 'lista' atteso.")
+    log(f"Elenco deleghe ottenuto via requests: {len(lista)} record.")
+    return lista
