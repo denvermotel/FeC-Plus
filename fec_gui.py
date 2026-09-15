@@ -2888,16 +2888,20 @@ class FecGui:
         prossima volta la finestra di deleghe non ancora sincronizzate.
         """
         import fec_deleghe_sync
-        import fec_download
 
         cf, pin, pwd, cfst = self._get_creds()
-        profilo = _profilo_da_modalita(self.modalita.get())
 
         def log(text: str):
             self.root.after(0, self._log, text if text.endswith("\n") else text + "\n")
 
-        from ade_auth import Creds, AuthError
-        creds = Creds(nomeutente=cf, pin=pin, password=pwd, cfstudio=cfst, profilo=profilo)
+        # Non riguarda alcun cliente delegato: serve solo ad accedere al portale
+        # Deleghe come STUDIO stesso per leggere il SUO elenco deleganti. Va
+        # sempre instradato sul cassetto proprio dello studio, indipendentemente
+        # dal profilo scelto dall'utente nel combo modalità (usato dalle altre
+        # tab per operare per conto di un cliente).
+        from ade_auth import Creds, AuthError, PROFILO_STUDIO_CASSETTO
+        creds = Creds(nomeutente=cf, pin=pin, password=pwd, cfstudio=cfst,
+                      profilo=PROFILO_STUDIO_CASSETTO)
 
         log(f"\n{'─' * 60}\n🔄  Sincronizza deleghe dal portale AdE\n{'─' * 60}")
         try:
@@ -2913,10 +2917,10 @@ class FecGui:
             grezzi, soglia_data="" if forza_tutte else soglia_data)
         log(f"{len(righe)} deleghe rilevanti trovate (dopo il filtro data).")
 
-        # Creato QUI (non dal chiamante) perché _deleghe_controlla_canali_nuovi
-        # (Task 6) legge self.control.check() alla prima iterazione: senza
-        # questa assegnazione fallirebbe con AttributeError.
-        self.control = fec_download.Controllo()
+        # self.control è già stato creato dal chiamante (thread Tk, prima di
+        # avviare questo worker), come per le altre operazioni in-process che
+        # usano Controllo/pausa-interrompi: _deleghe_controlla_canali_nuovi lo
+        # legge subito con self.control.check() alla prima iterazione.
 
         self.deleghe_rows, nuovi_cf = self._deleghe.merge_many_con_nuovi(
             self.deleghe_rows, righe)
@@ -2978,6 +2982,7 @@ class FecGui:
         """Dialogo di lancio per _deleghe_sincronizza_da_portale: soglia data
         (default l'ultima sincronizzazione riuscita) e opzione per ignorarla."""
         import fec_store
+        from datetime import datetime, date
         cfg = fec_store.load_settings()
         ultima = cfg.get("deleghe_sync_ultima_data", "")
 
@@ -2994,6 +2999,11 @@ class FecGui:
         soglia_var = tk.StringVar(value=ultima)
         data_w = self._date_widget(frm, soglia_var, "%d/%m/%Y")
         data_w.grid(row=0, column=1, sticky="w", pady=(0, 4))
+        try:
+            d_iniziale = datetime.strptime(ultima, "%d/%m/%Y").date()
+        except ValueError:
+            d_iniziale = date.today()
+        self._set_date(data_w, soglia_var, d_iniziale, "%d/%m/%Y")
 
         tutte_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(frm, text="Ricarica TUTTE le deleghe (ignora la data sopra)",
@@ -3001,8 +3011,19 @@ class FecGui:
                                                 sticky="w", pady=(6, 0))
 
         def avvia():
+            # Un'operazione alla volta, controllata PRIMA di tutto: stesso
+            # criterio di _deleghe_aggiorna_tutte, così Pausa/Interrompi restano
+            # sempre collegati al worker davvero in corso.
+            if self._operazione_in_corso():
+                messagebox.showwarning("In esecuzione", "Un'operazione è già in corso.")
+                return
             win.destroy()
             soglia = "" if tutte_var.get() else soglia_var.get().strip()
+
+            import fec_download
+            self.control = fec_download.Controllo()
+            self._reset_pausa_btn()
+            self._imposta_comandi_task(True)
 
             def task(log):
                 ok = self._deleghe_sincronizza_da_portale(

@@ -30,8 +30,10 @@ class TestDelegheControllaCanaliNuovi(unittest.TestCase):
         # dalle regole del progetto per ogni test che arriva a save_deleghe.
         self._patch_save = patch.object(self.app._deleghe, "save_deleghe")
         self._patch_save.start()
-        # In produzione self.control viene creato dal chiamante (Task 7, la GUI
-        # di sincronizzazione) prima di lanciare il worker; qui lo simuliamo.
+        # In produzione self.control viene creato dal chiamante (il dialogo di
+        # sincronizzazione da portale, sul thread Tk) prima di lanciare il
+        # worker, come per le altre operazioni in-process con pausa/interrompi;
+        # qui lo simuliamo direttamente.
         self.app.control = fec_download.Controllo()
         self.app.deleghe_rows = [
             {"codice_fiscale": "AAA", "denominazione": "Cliente A",

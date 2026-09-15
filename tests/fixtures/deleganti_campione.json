@@ -255,7 +255,7 @@
       "idRichiesta": "ID000000000000005",
       "progRichiesta": "2",
       "tipoDelega": "UN",
-      "cfDelegante": "CFDELEG000050",
+      "cfDelegante": "CFDELEG000050   ",
       "denomDelegante": "Delegante Anonimo 5",
       "cfDelegato": "01820310819",
       "denomDelegato": "Studio Anonimo",

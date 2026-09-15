@@ -196,10 +196,10 @@ def sincronizza(creds, *, log=print, forza_browser: bool = False) -> list[dict]:
 
     if not forza_browser:
         log("Sincronizzazione deleghe: provo il backend leggero (requests)...")
-        auth = ade_auth.autentica(creds, backend="requests", log=log)
         try:
+            auth = ade_auth.autentica(creds, backend="requests", log=log)
             return fetch_deleganti_raw(auth, log=log)
-        except SincronizzazioneBloccata as exc:
+        except (SincronizzazioneBloccata, ade_auth.AuthError) as exc:
             log(f"Backend requests non utilizzabile: {exc}")
 
     mancanti = fec_deps.find_missing().get("browser", [])

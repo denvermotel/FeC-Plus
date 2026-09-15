@@ -116,6 +116,10 @@ def main():
     vecchio_isolato["cfDelegante"] = "CFTEST_ISOLATO_001"  # CF fittizio univoco, mai visto altrove nel campione originale
     vecchio_isolato["dataInizioDel"] = "01/01/2022"
     aggiungi(vecchio_isolato)
+    # Spazi finali nel CF sintetico di un record RILEVANTE (sopravvive al filtro
+    # _e_rilevante, a differenza del CE sopra): esercita davvero lo strip in
+    # elabora_deleganti, non solo su un record che verrebbe comunque scartato.
+    campione[-1]["cfDelegante"] = campione[-1]["cfDelegante"] + "   "
 
     with open(_OUT, "w", encoding="utf-8") as fh:
         json.dump({"lista": campione}, fh, indent=2, ensure_ascii=False)

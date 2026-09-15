@@ -208,10 +208,12 @@ class TestSincronizza(unittest.TestCase):
             sync.sincronizza(creds, log=lambda _m: None)
         mock_autentica.assert_called_once()  # niente secondo tentativo
 
+    @patch("fec_deps.find_missing")
     @patch("fec_deleghe_sync.fetch_deleganti_raw")
     @patch("ade_auth.autentica")
     def test_forza_browser_salta_il_tentativo_requests(
-            self, mock_autentica, mock_fetch):
+            self, mock_autentica, mock_fetch, mock_missing):
+        mock_missing.return_value = {"browser": []}  # Playwright installato
         mock_autentica.return_value = MagicMock()
         mock_fetch.return_value = [{"cfDelegante": "Z"}]
         creds = MagicMock()
@@ -221,6 +223,50 @@ class TestSincronizza(unittest.TestCase):
         mock_autentica.assert_called_once()
         _, kwargs = mock_autentica.call_args
         self.assertEqual(kwargs.get("backend"), "browser")
+
+    @patch("fec_deps.find_missing")
+    @patch("fec_deleghe_sync.fetch_deleganti_raw")
+    @patch("ade_auth.autentica")
+    def test_fallback_browser_se_login_requests_fallisce(
+            self, mock_autentica, mock_fetch, mock_missing):
+        # Il blocco anti-bot Akamai puo' colpire gia' il login (non solo il
+        # fetch successivo): anche un AuthError dal tentativo requests deve far
+        # scattare il fallback al backend browser, non propagarsi subito.
+        from ade_auth import AuthError
+        mock_missing.return_value = {"browser": []}  # Playwright installato
+        mock_autentica.side_effect = [
+            AuthError("login", "bloccato"),
+            MagicMock(),
+        ]
+        mock_fetch.return_value = [{"cfDelegante": "Y"}]
+        creds = MagicMock()
+
+        risultato = sync.sincronizza(creds, log=lambda _m: None)
+
+        self.assertEqual(risultato, [{"cfDelegante": "Y"}])
+        self.assertEqual(mock_autentica.call_count, 2)
+        backend_usati = [c.kwargs.get("backend") for c in mock_autentica.call_args_list]
+        self.assertEqual(backend_usati, ["requests", "browser"])
+        mock_fetch.assert_called_once()  # solo dopo il login riuscito sul browser
+
+    @patch("fec_deps.find_missing")
+    @patch("fec_deleghe_sync.fetch_deleganti_raw")
+    @patch("ade_auth.autentica")
+    def test_login_fallisce_anche_su_browser_propaga_autherror(
+            self, mock_autentica, mock_fetch, mock_missing):
+        # Se anche il fallback al backend browser fallisce con AuthError,
+        # l'eccezione deve propagarsi normalmente (non va soppressa).
+        from ade_auth import AuthError
+        mock_missing.return_value = {"browser": []}  # Playwright installato
+        mock_autentica.side_effect = [
+            AuthError("login", "bloccato requests"),
+            AuthError("login", "bloccato anche browser"),
+        ]
+        creds = MagicMock()
+
+        with self.assertRaises(AuthError):
+            sync.sincronizza(creds, log=lambda _m: None)
+        mock_fetch.assert_not_called()
 
 
 if __name__ == "__main__":
