@@ -148,6 +148,16 @@ class TestFetchDelegantiRaw(unittest.TestCase):
         with self.assertRaises(sync.SincronizzazioneBloccata):
             sync.fetch_deleganti_raw(auth, log=lambda _m: None)
 
+    def test_fetch_json_invalido_solleva_sincronizzazione_bloccata(self):
+        auth = self._auth_finto({
+            "PortaleWeb/home": _RispostaFinta(200, text="<html></html>"),
+            "initPortale": _RispostaFinta(200, text="{}"),
+            "initLight": _RispostaFinta(200, text=""),
+            "delegheUniche/deleganti": _RispostaFinta(200, json_data=None),
+        })
+        with self.assertRaises(sync.SincronizzazioneBloccata):
+            sync.fetch_deleganti_raw(auth, log=lambda _m: None)
+
 
 if __name__ == "__main__":
     unittest.main()
