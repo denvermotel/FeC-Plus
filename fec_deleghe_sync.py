@@ -170,3 +170,45 @@ def fetch_deleganti_raw(auth, *, log=print) -> list[dict]:
             "La risposta non contiene il campo 'lista' atteso.")
     log(f"Elenco deleghe ottenuto via requests: {len(lista)} record.")
     return lista
+
+
+class PlaywrightNonDisponibile(RuntimeError):
+    """Il fetch via requests è fallito (probabile blocco anti-bot) e Playwright
+    non è installato: la sincronizzazione non è disponibile in questa
+    installazione finché non si installa Playwright (ruolo "browser" in
+    fec_deps.py)."""
+
+
+def sincronizza(creds, *, log=print, forza_browser: bool = False) -> list[dict]:
+    """
+    Ottiene l'elenco grezzo delle deleghe (tutti i servizi) per il CF studio in
+    `creds`, tentando prima il backend leggero `requests` (funziona solo se AdE
+    non applica un blocco anti-bot alla sessione) e ripiegando in automatico sul
+    backend browser (Playwright, richiede l'installazione) se il primo tentativo
+    fallisce. Con `forza_browser=True` salta direttamente al backend browser.
+
+    Solleva `ade_auth.AuthError` se il login fallisce (con entrambi i tentativi),
+    `PlaywrightNonDisponibile` se il tentativo requests fallisce e Playwright non
+    è installato.
+    """
+    import ade_auth
+    import fec_deps
+
+    if not forza_browser:
+        log("Sincronizzazione deleghe: provo il backend leggero (requests)...")
+        auth = ade_auth.autentica(creds, backend="requests", log=log)
+        try:
+            return fetch_deleganti_raw(auth, log=log)
+        except SincronizzazioneBloccata as exc:
+            log(f"Backend requests non utilizzabile: {exc}")
+
+    mancanti = fec_deps.find_missing().get("browser", [])
+    if mancanti:
+        raise PlaywrightNonDisponibile(
+            "Il portale Deleghe ha bloccato il tentativo leggero e Playwright "
+            f"non è installato ({', '.join(mancanti)}): installa Playwright per "
+            "usare questa funzione, oppure importa le deleghe dal CSV manuale.")
+
+    log("Riprovo con il backend browser (Playwright)...")
+    auth = ade_auth.autentica(creds, backend="browser", headless=True, log=log)
+    return fetch_deleganti_raw(auth, log=log)

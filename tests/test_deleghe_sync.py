@@ -5,7 +5,7 @@
 import json
 import os
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import fec_deleghe_sync as sync
 
@@ -157,6 +157,70 @@ class TestFetchDelegantiRaw(unittest.TestCase):
         })
         with self.assertRaises(sync.SincronizzazioneBloccata):
             sync.fetch_deleganti_raw(auth, log=lambda _m: None)
+
+
+class TestSincronizza(unittest.TestCase):
+    @patch("fec_deleghe_sync.fetch_deleganti_raw")
+    @patch("ade_auth.autentica")
+    def test_successo_al_primo_tentativo_requests(self, mock_autentica, mock_fetch):
+        mock_autentica.return_value = MagicMock()
+        mock_fetch.return_value = [{"cfDelegante": "X"}]
+        creds = MagicMock()
+
+        risultato = sync.sincronizza(creds, log=lambda _m: None)
+
+        self.assertEqual(risultato, [{"cfDelegante": "X"}])
+        mock_autentica.assert_called_once()
+        _, kwargs = mock_autentica.call_args
+        self.assertEqual(kwargs.get("backend"), "requests")
+
+    @patch("fec_deps.find_missing")
+    @patch("fec_deleghe_sync.fetch_deleganti_raw")
+    @patch("ade_auth.autentica")
+    def test_fallback_browser_se_requests_bloccato(
+            self, mock_autentica, mock_fetch, mock_missing):
+        mock_missing.return_value = {"browser": []}  # Playwright installato
+        mock_autentica.return_value = MagicMock()
+        mock_fetch.side_effect = [
+            sync.SincronizzazioneBloccata("bloccato"),
+            [{"cfDelegante": "Y"}],
+        ]
+        creds = MagicMock()
+
+        risultato = sync.sincronizza(creds, log=lambda _m: None)
+
+        self.assertEqual(risultato, [{"cfDelegante": "Y"}])
+        self.assertEqual(mock_autentica.call_count, 2)
+        backend_usati = [c.kwargs.get("backend") for c in mock_autentica.call_args_list]
+        self.assertEqual(backend_usati, ["requests", "browser"])
+
+    @patch("fec_deps.find_missing")
+    @patch("fec_deleghe_sync.fetch_deleganti_raw")
+    @patch("ade_auth.autentica")
+    def test_playwright_non_disponibile_se_requests_fallisce_e_manca_browser(
+            self, mock_autentica, mock_fetch, mock_missing):
+        mock_missing.return_value = {"browser": ["playwright"]}  # NON installato
+        mock_autentica.return_value = MagicMock()
+        mock_fetch.side_effect = sync.SincronizzazioneBloccata("bloccato")
+        creds = MagicMock()
+
+        with self.assertRaises(sync.PlaywrightNonDisponibile):
+            sync.sincronizza(creds, log=lambda _m: None)
+        mock_autentica.assert_called_once()  # niente secondo tentativo
+
+    @patch("fec_deleghe_sync.fetch_deleganti_raw")
+    @patch("ade_auth.autentica")
+    def test_forza_browser_salta_il_tentativo_requests(
+            self, mock_autentica, mock_fetch):
+        mock_autentica.return_value = MagicMock()
+        mock_fetch.return_value = [{"cfDelegante": "Z"}]
+        creds = MagicMock()
+
+        sync.sincronizza(creds, log=lambda _m: None, forza_browser=True)
+
+        mock_autentica.assert_called_once()
+        _, kwargs = mock_autentica.call_args
+        self.assertEqual(kwargs.get("backend"), "browser")
 
 
 if __name__ == "__main__":
