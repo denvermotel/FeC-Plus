@@ -2873,13 +2873,19 @@ class FecGui:
             f"{len(falliti)} non riuscite"
             + (f" ({', '.join(falliti)})" if falliti else "."))
 
-    def _deleghe_sincronizza_da_portale(self, *, soglia_data: str, forza_tutte: bool):
+    def _deleghe_sincronizza_da_portale(self, *, soglia_data: str, forza_tutte: bool) -> bool:
         """
         Scarica l'elenco deleghe dal portale Deleghe AdE (fec_deleghe_sync), lo
         unisce con l'anagrafica locale (CF noti: solo scadenza aggiornata, CF nuovi:
         inseriti) e, se ci sono deleghe nuove, propone con una stima del tempo di
         completare canale ricezione/canale forniture massive per quelle soltanto.
         Va chiamato da un worker thread (self._run_inprocess).
+
+        Ritorna True se ha raggiunto almeno il merge/salvataggio dell'anagrafica,
+        False se e' tornata prima (Playwright non disponibile o login fallito):
+        il chiamante usa questo esito per decidere se avanzare la soglia
+        `deleghe_sync_ultima_data`, altrimenti si perderebbe silenziosamente la
+        prossima volta la finestra di deleghe non ancora sincronizzate.
         """
         import fec_deleghe_sync
         import fec_download
@@ -2898,10 +2904,10 @@ class FecGui:
             grezzi = fec_deleghe_sync.sincronizza(creds, log=log)
         except fec_deleghe_sync.PlaywrightNonDisponibile as exc:
             log(f"\n❌ {exc}")
-            return
+            return False
         except AuthError as exc:
             log(f"\n❌ Login fallito allo step «{exc.step}»: {exc.dettaglio}")
-            return
+            return False
 
         righe = fec_deleghe_sync.elabora_deleganti(
             grezzi, soglia_data="" if forza_tutte else soglia_data)
@@ -2920,7 +2926,7 @@ class FecGui:
             f"{len(righe) - len(nuovi_cf)} già note (scadenza aggiornata se cambiata).")
 
         if not nuovi_cf:
-            return
+            return True
 
         procedi = self._chiedi_conferma_controllo_nuovi_thread(len(nuovi_cf))
         if procedi:
@@ -2928,6 +2934,7 @@ class FecGui:
         else:
             log("Controllo canale ricezione/forniture massive rimandato "
                 "(le deleghe restano comunque importate).")
+        return True
 
     def _chiedi_conferma_controllo_nuovi_thread(self, n: int) -> bool:
         """Mostra la conferma con stima prima del check costoso e ne attende
@@ -2998,9 +3005,10 @@ class FecGui:
             soglia = "" if tutte_var.get() else soglia_var.get().strip()
 
             def task(log):
-                self._deleghe_sincronizza_da_portale(
+                ok = self._deleghe_sincronizza_da_portale(
                     soglia_data=soglia, forza_tutte=tutte_var.get())
-                self._persist_deleghe_sync_data()
+                if ok:
+                    self._persist_deleghe_sync_data()
 
             self._run_inprocess(task)
 

@@ -131,13 +131,15 @@ class TestDelegheSincronizzaDaPortale(unittest.TestCase):
         self.app.modalita.get.return_value = "Studio - Delega Cliente"
         self.app._deleghe_controlla_canali_nuovi = MagicMock()
 
-        self.app._deleghe_sincronizza_da_portale(soglia_data="", forza_tutte=False)
+        esito = self.app._deleghe_sincronizza_da_portale(soglia_data="", forza_tutte=False)
 
         cf_presenti = {r["codice_fiscale"] for r in self.app.deleghe_rows}
         self.assertIn("BBB", cf_presenti)
         mock_askyesno.assert_called_once()
         # L'utente ha rifiutato (return_value=False): il check costoso non parte.
         self.app._deleghe_controlla_canali_nuovi.assert_not_called()
+        # Il merge/salvataggio e' comunque avvenuto: esito positivo.
+        self.assertTrue(esito)
 
     @patch("fec_gui.messagebox.askyesno", return_value=True)
     @patch("fec_deleghe_sync.sincronizza")
@@ -152,9 +154,10 @@ class TestDelegheSincronizzaDaPortale(unittest.TestCase):
         self.app.modalita.get.return_value = "Studio - Delega Cliente"
         self.app._deleghe_controlla_canali_nuovi = MagicMock()
 
-        self.app._deleghe_sincronizza_da_portale(soglia_data="", forza_tutte=False)
+        esito = self.app._deleghe_sincronizza_da_portale(soglia_data="", forza_tutte=False)
 
         self.app._deleghe_controlla_canali_nuovi.assert_called_once_with(["CCC"])
+        self.assertTrue(esito)
 
     @patch("fec_gui.messagebox.askyesno")
     @patch("fec_deleghe_sync.sincronizza")
@@ -170,9 +173,40 @@ class TestDelegheSincronizzaDaPortale(unittest.TestCase):
         self.app.modalita.get.return_value = "Studio - Delega Cliente"
         self.app._deleghe_controlla_canali_nuovi = MagicMock()
 
-        self.app._deleghe_sincronizza_da_portale(soglia_data="", forza_tutte=False)
+        esito = self.app._deleghe_sincronizza_da_portale(soglia_data="", forza_tutte=False)
 
         mock_askyesno.assert_not_called()
+        self.app._deleghe_controlla_canali_nuovi.assert_not_called()
+        self.assertTrue(esito)
+
+    @patch("fec_deleghe_sync.sincronizza")
+    def test_playwright_non_disponibile_ritorna_false(self, mock_sync):
+        import fec_deleghe_sync
+        mock_sync.side_effect = fec_deleghe_sync.PlaywrightNonDisponibile(
+            "playwright non installato")
+        self.app._get_creds = MagicMock(return_value=("cf", "pin", "pwd", "cfst"))
+        self.app.modalita = MagicMock()
+        self.app.modalita.get.return_value = "Studio - Delega Cliente"
+        self.app._deleghe_controlla_canali_nuovi = MagicMock()
+
+        esito = self.app._deleghe_sincronizza_da_portale(soglia_data="", forza_tutte=False)
+
+        self.assertFalse(esito)
+        # Nessun merge/salvataggio, nessun controllo canali: e' tornata subito.
+        self.app._deleghe_controlla_canali_nuovi.assert_not_called()
+
+    @patch("fec_deleghe_sync.sincronizza")
+    def test_login_fallito_ritorna_false(self, mock_sync):
+        from ade_auth import AuthError
+        mock_sync.side_effect = AuthError("login", "credenziali non valide")
+        self.app._get_creds = MagicMock(return_value=("cf", "pin", "pwd", "cfst"))
+        self.app.modalita = MagicMock()
+        self.app.modalita.get.return_value = "Studio - Delega Cliente"
+        self.app._deleghe_controlla_canali_nuovi = MagicMock()
+
+        esito = self.app._deleghe_sincronizza_da_portale(soglia_data="", forza_tutte=False)
+
+        self.assertFalse(esito)
         self.app._deleghe_controlla_canali_nuovi.assert_not_called()
 
 
