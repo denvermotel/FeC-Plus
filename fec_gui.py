@@ -2456,6 +2456,8 @@ class FecGui:
         # «Elimina» e «Aggiorna da AdE» sono nel menu tasto destro sulla riga.
         ttk.Button(bar, text="↻↻ Aggiorna selezionate",
                    command=self._deleghe_aggiorna_tutte).pack(side=tk.LEFT, padx=(18, 6))
+        ttk.Button(bar, text="🔄 Sincronizza da Portale Deleghe",
+                  command=self._deleghe_apri_dialogo_sincronizza).pack(side=tk.LEFT, padx=(8, 0))
         self.deleghe_sel_count = tk.StringVar(value="")
         ttk.Label(bar, textvariable=self.deleghe_sel_count,
                   foreground="#777").pack(side=tk.LEFT, padx=(0, 6))
@@ -2870,6 +2872,154 @@ class FecGui:
         log(f"\n[Completato] {controllati} deleghe controllate, "
             f"{len(falliti)} non riuscite"
             + (f" ({', '.join(falliti)})" if falliti else "."))
+
+    def _deleghe_sincronizza_da_portale(self, *, soglia_data: str, forza_tutte: bool):
+        """
+        Scarica l'elenco deleghe dal portale Deleghe AdE (fec_deleghe_sync), lo
+        unisce con l'anagrafica locale (CF noti: solo scadenza aggiornata, CF nuovi:
+        inseriti) e, se ci sono deleghe nuove, propone con una stima del tempo di
+        completare canale ricezione/canale forniture massive per quelle soltanto.
+        Va chiamato da un worker thread (self._run_inprocess).
+        """
+        import fec_deleghe_sync
+        import fec_download
+
+        cf, pin, pwd, cfst = self._get_creds()
+        profilo = _profilo_da_modalita(self.modalita.get())
+
+        def log(text: str):
+            self.root.after(0, self._log, text if text.endswith("\n") else text + "\n")
+
+        from ade_auth import Creds, AuthError
+        creds = Creds(nomeutente=cf, pin=pin, password=pwd, cfstudio=cfst, profilo=profilo)
+
+        log(f"\n{'─' * 60}\n🔄  Sincronizza deleghe dal portale AdE\n{'─' * 60}")
+        try:
+            grezzi = fec_deleghe_sync.sincronizza(creds, log=log)
+        except fec_deleghe_sync.PlaywrightNonDisponibile as exc:
+            log(f"\n❌ {exc}")
+            return
+        except AuthError as exc:
+            log(f"\n❌ Login fallito allo step «{exc.step}»: {exc.dettaglio}")
+            return
+
+        righe = fec_deleghe_sync.elabora_deleganti(
+            grezzi, soglia_data="" if forza_tutte else soglia_data)
+        log(f"{len(righe)} deleghe rilevanti trovate (dopo il filtro data).")
+
+        # Creato QUI (non dal chiamante) perché _deleghe_controlla_canali_nuovi
+        # (Task 6) legge self.control.check() alla prima iterazione: senza
+        # questa assegnazione fallirebbe con AttributeError.
+        self.control = fec_download.Controllo()
+
+        self.deleghe_rows, nuovi_cf = self._deleghe.merge_many_con_nuovi(
+            self.deleghe_rows, righe)
+        self._deleghe.save_deleghe(self.deleghe_rows)
+        self.root.after(0, self._deleghe_reload)
+        log(f"Anagrafica aggiornata: {len(nuovi_cf)} deleghe nuove, "
+            f"{len(righe) - len(nuovi_cf)} già note (scadenza aggiornata se cambiata).")
+
+        if not nuovi_cf:
+            return
+
+        procedi = self._chiedi_conferma_controllo_nuovi_thread(len(nuovi_cf))
+        if procedi:
+            self._deleghe_controlla_canali_nuovi(nuovi_cf)
+        else:
+            log("Controllo canale ricezione/forniture massive rimandato "
+                "(le deleghe restano comunque importate).")
+
+    def _chiedi_conferma_controllo_nuovi_thread(self, n: int) -> bool:
+        """Mostra la conferma con stima prima del check costoso e ne attende
+        l'esito. `_deleghe_sincronizza_da_portale` gira normalmente su un worker
+        thread (self._run_inprocess): in quel caso il popup va aperto sul thread
+        Tk e atteso con un Event. Se invece siamo già sul thread principale
+        (es. chiamata diretta, come nei test) si chiama askyesno direttamente,
+        altrimenti root.after non verrebbe mai processato e si bloccherebbe qui
+        per sempre in attesa dell'Event."""
+        if threading.current_thread() is threading.main_thread():
+            return messagebox.askyesno(
+                "Controllo deleghe nuove",
+                self._testo_conferma_controllo_nuovi(n))
+
+        evt = threading.Event()
+        box = {"conferma": False}
+
+        def _ask():
+            try:
+                box["conferma"] = messagebox.askyesno(
+                    "Controllo deleghe nuove",
+                    self._testo_conferma_controllo_nuovi(n))
+            finally:
+                evt.set()
+
+        self.root.after(0, _ask)
+        evt.wait()
+        return box["conferma"]
+
+    @staticmethod
+    def _testo_conferma_controllo_nuovi(n: int) -> str:
+        secondi_stimati = n * 8  # stima grezza, un cambio utenza reale richiede alcuni secondi
+        minuti_stimati = max(1, round(secondi_stimati / 60))
+        return (f"{n} deleghe nuove trovate. Completare canale ricezione e "
+                "canale forniture massive richiede un accesso per ciascuna "
+                f"(stima: circa {minuti_stimati} minut{'o' if minuti_stimati == 1 else 'i'}). "
+                "Puoi interromperlo in qualsiasi momento con «Interrompi».\n\n"
+                "Procedere ora?")
+
+    def _deleghe_apri_dialogo_sincronizza(self):
+        """Dialogo di lancio per _deleghe_sincronizza_da_portale: soglia data
+        (default l'ultima sincronizzazione riuscita) e opzione per ignorarla."""
+        import fec_store
+        cfg = fec_store.load_settings()
+        ultima = cfg.get("deleghe_sync_ultima_data", "")
+
+        win = tk.Toplevel(self.root)
+        win.title("Sincronizza da Portale Deleghe")
+        win.transient(self.root)
+        win.grab_set()
+        win.resizable(False, False)
+
+        frm = ttk.Frame(win, padding=(18, 14))
+        frm.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(frm, text="Importa deleghe con data di inizio da:").grid(
+            row=0, column=0, sticky="w", pady=(0, 4))
+        soglia_var = tk.StringVar(value=ultima)
+        data_w = self._date_widget(frm, soglia_var, "%d/%m/%Y")
+        data_w.grid(row=0, column=1, sticky="w", pady=(0, 4))
+
+        tutte_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frm, text="Ricarica TUTTE le deleghe (ignora la data sopra)",
+                       variable=tutte_var).grid(row=1, column=0, columnspan=2,
+                                                sticky="w", pady=(6, 0))
+
+        def avvia():
+            win.destroy()
+            soglia = "" if tutte_var.get() else soglia_var.get().strip()
+
+            def task(log):
+                self._deleghe_sincronizza_da_portale(
+                    soglia_data=soglia, forza_tutte=tutte_var.get())
+                self._persist_deleghe_sync_data()
+
+            self._run_inprocess(task)
+
+        barra = ttk.Frame(frm)
+        barra.grid(row=2, column=0, columnspan=2, sticky="e", pady=(14, 0))
+        ttk.Button(barra, text="Annulla", command=win.destroy).pack(
+            side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(barra, text="Avvia", command=avvia).pack(side=tk.RIGHT)
+
+        win.bind("<Escape>", lambda _e: win.destroy())
+
+    def _persist_deleghe_sync_data(self):
+        """Salva la data odierna come soglia proposta la prossima volta (solo se la
+        sincronizzazione è arrivata almeno al merge, non se è fallita prima)."""
+        import fec_store
+        from datetime import date
+        cfg = fec_store.load_settings()
+        cfg["deleghe_sync_ultima_data"] = date.today().strftime("%d/%m/%Y")
+        fec_store.save_settings(cfg)
 
     # Messaggi testuali con cui l'API di instradamento segnala che la delega non è
     # più valida (scaduta/revocata): non c'è un codice errore dedicato, solo testo

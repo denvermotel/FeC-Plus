@@ -98,5 +98,83 @@ class TestDelegheControllaCanaliNuovi(unittest.TestCase):
         self.assertEqual(riga_b["codice_destinatario"], "XYZ9999")
 
 
+@unittest.skipUnless(_tk_disponibile(), "richiede un display Tk")
+class TestDelegheSincronizzaDaPortale(unittest.TestCase):
+    def setUp(self):
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.app = fec_gui.FecGui(self.root)
+        self._patch_save = patch.object(self.app._deleghe, "save_deleghe")
+        self._patch_save.start()
+        self.app.deleghe_rows = [
+            {"codice_fiscale": "AAA", "denominazione": "Cliente A",
+            "partita_iva": "", "data_fine_delega": "", "conservazione": False,
+            "codice_destinatario": "", "pec": "", "canale_massivo": "",
+            "etichetta1": "", "etichetta2": ""},
+        ]
+
+    def tearDown(self):
+        self._patch_save.stop()
+        self.root.destroy()
+
+    @patch("fec_gui.messagebox.askyesno", return_value=False)
+    @patch("fec_deleghe_sync.sincronizza")
+    def test_nuove_deleghe_propone_controllo_con_stima_e_lo_rifiuta(
+            self, mock_sync, mock_askyesno):
+        mock_sync.return_value = [
+            {"cfDelegante": "BBB", "denomDelegante": "Cliente B",
+            "servizi": [{"idServizio": "I42"}],
+            "dataInizioDel": "01/01/2020", "dataFineDel": "01/01/2030"},
+        ]
+        self.app._get_creds = MagicMock(return_value=("cf", "pin", "pwd", "cfst"))
+        self.app.modalita = MagicMock()
+        self.app.modalita.get.return_value = "Studio - Delega Cliente"
+        self.app._deleghe_controlla_canali_nuovi = MagicMock()
+
+        self.app._deleghe_sincronizza_da_portale(soglia_data="", forza_tutte=False)
+
+        cf_presenti = {r["codice_fiscale"] for r in self.app.deleghe_rows}
+        self.assertIn("BBB", cf_presenti)
+        mock_askyesno.assert_called_once()
+        # L'utente ha rifiutato (return_value=False): il check costoso non parte.
+        self.app._deleghe_controlla_canali_nuovi.assert_not_called()
+
+    @patch("fec_gui.messagebox.askyesno", return_value=True)
+    @patch("fec_deleghe_sync.sincronizza")
+    def test_conferma_stima_avvia_il_controllo(self, mock_sync, mock_askyesno):
+        mock_sync.return_value = [
+            {"cfDelegante": "CCC", "denomDelegante": "Cliente C",
+            "servizi": [{"idServizio": "I31"}],
+            "dataInizioDel": "01/01/2020", "dataFineDel": "01/01/2030"},
+        ]
+        self.app._get_creds = MagicMock(return_value=("cf", "pin", "pwd", "cfst"))
+        self.app.modalita = MagicMock()
+        self.app.modalita.get.return_value = "Studio - Delega Cliente"
+        self.app._deleghe_controlla_canali_nuovi = MagicMock()
+
+        self.app._deleghe_sincronizza_da_portale(soglia_data="", forza_tutte=False)
+
+        self.app._deleghe_controlla_canali_nuovi.assert_called_once_with(["CCC"])
+
+    @patch("fec_gui.messagebox.askyesno")
+    @patch("fec_deleghe_sync.sincronizza")
+    def test_nessuna_delega_nuova_non_chiede_conferma(self, mock_sync, mock_askyesno):
+        # AAA e' gia' in anagrafica: nessun CF nuovo.
+        mock_sync.return_value = [
+            {"cfDelegante": "AAA", "denomDelegante": "Cliente A",
+            "servizi": [{"idServizio": "I42"}],
+            "dataInizioDel": "01/01/2020", "dataFineDel": "01/01/2035"},
+        ]
+        self.app._get_creds = MagicMock(return_value=("cf", "pin", "pwd", "cfst"))
+        self.app.modalita = MagicMock()
+        self.app.modalita.get.return_value = "Studio - Delega Cliente"
+        self.app._deleghe_controlla_canali_nuovi = MagicMock()
+
+        self.app._deleghe_sincronizza_da_portale(soglia_data="", forza_tutte=False)
+
+        mock_askyesno.assert_not_called()
+        self.app._deleghe_controlla_canali_nuovi.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
