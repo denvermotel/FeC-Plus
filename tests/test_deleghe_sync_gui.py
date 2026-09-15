@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Test di FecGui._deleghe_controlla_canali_nuovi, in isolamento dal resto
+della GUI (stesso approccio di test_nastro.py/test_progresso.py)."""
+
+import tkinter as tk
+import unittest
+from unittest.mock import MagicMock, patch
+
+import fec_download
+import fec_gui
+
+
+def _tk_disponibile() -> bool:
+    try:
+        r = tk.Tk()
+        r.destroy()
+        return True
+    except tk.TclError:
+        return False
+
+
+@unittest.skipUnless(_tk_disponibile(), "richiede un display Tk")
+class TestDelegheControllaCanaliNuovi(unittest.TestCase):
+    def setUp(self):
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.app = fec_gui.FecGui(self.root)
+        # Mai toccare fec_deleghe.json reale: mock esplicito, come richiesto
+        # dalle regole del progetto per ogni test che arriva a save_deleghe.
+        self._patch_save = patch.object(self.app._deleghe, "save_deleghe")
+        self._patch_save.start()
+        # In produzione self.control viene creato dal chiamante (Task 7, la GUI
+        # di sincronizzazione) prima di lanciare il worker; qui lo simuliamo.
+        self.app.control = fec_download.Controllo()
+        self.app.deleghe_rows = [
+            {"codice_fiscale": "AAA", "denominazione": "Cliente A",
+            "partita_iva": "", "data_fine_delega": "", "conservazione": False,
+            "codice_destinatario": "", "pec": "", "canale_massivo": "",
+            "etichetta1": "", "etichetta2": ""},
+        ]
+
+    def tearDown(self):
+        self._patch_save.stop()
+        self.root.destroy()
+
+    @patch("fec_anagrafica.recupera")
+    @patch("ade_auth.seleziona_utenza")
+    @patch("ade_auth.autentica")
+    def test_applica_dati_ade_al_cf_nuovo(self, mock_autentica, mock_scelta,
+                                          mock_recupera):
+        mock_autentica.return_value = MagicMock()
+        mock_scelta.return_value = MagicMock()
+        mock_recupera.return_value = {
+            "denominazione": "Cliente A", "partita_iva": "01234567890",
+            "conservazione": True, "codice_destinatario": "ABC1234",
+            "pec": "", "canale_massivo": "Fornitore (SCARICO FATTURE)",
+        }
+        self.app._get_creds = MagicMock(return_value=("cf", "pin", "pwd", "cfst"))
+        self.app.modalita = MagicMock()
+        self.app.modalita.get.return_value = "Studio - Delega Cliente"
+
+        self.app._deleghe_controlla_canali_nuovi(["AAA"])
+
+        riga = self.app.deleghe_rows[0]
+        self.assertEqual(riga["codice_destinatario"], "ABC1234")
+        self.assertEqual(riga["canale_massivo"], "Fornitore (SCARICO FATTURE)")
+        self.assertTrue(riga["conservazione"])
+
+    @patch("fec_anagrafica.recupera")
+    @patch("ade_auth.seleziona_utenza")
+    @patch("ade_auth.autentica")
+    def test_cf_fallito_non_interrompe_il_lotto(self, mock_autentica, mock_scelta,
+                                                mock_recupera):
+        from ade_auth import AuthError
+        self.app.deleghe_rows.append({
+            "codice_fiscale": "BBB", "denominazione": "Cliente B",
+            "partita_iva": "", "data_fine_delega": "", "conservazione": False,
+            "codice_destinatario": "", "pec": "", "canale_massivo": "",
+            "etichetta1": "", "etichetta2": "",
+        })
+        mock_autentica.return_value = MagicMock()
+        mock_scelta.side_effect = [AuthError("utenza", "Delegante non trovato"),
+                                   MagicMock()]
+        mock_recupera.return_value = {
+            "denominazione": "Cliente B", "partita_iva": "",
+            "conservazione": False, "codice_destinatario": "XYZ9999",
+            "pec": "", "canale_massivo": "",
+        }
+        self.app._get_creds = MagicMock(return_value=("cf", "pin", "pwd", "cfst"))
+        self.app.modalita = MagicMock()
+        self.app.modalita.get.return_value = "Studio - Delega Cliente"
+
+        self.app._deleghe_controlla_canali_nuovi(["AAA", "BBB"])
+
+        riga_b = next(r for r in self.app.deleghe_rows
+                     if r["codice_fiscale"] == "BBB")
+        self.assertEqual(riga_b["codice_destinatario"], "XYZ9999")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -2793,6 +2793,84 @@ class FecGui:
 
         self._run_inprocess(task)
 
+    def _deleghe_controlla_canali_nuovi(self, cf_lista: list[str]):
+        """
+        Completa canale ricezione (SDI/PEC) e canale forniture massive per i CF in
+        `cf_lista` (tipicamente le deleghe appena importate da una sincronizzazione
+        dal portale Deleghe, vedi `_deleghe_sincronizza_da_portale`): un login
+        studio, poi cambio utenza per ciascun CF (stesso schema di
+        `_deleghe_aggiorna_tutte`), applicando i campi SENZA popup di conferma (li
+        ha già confermati l'utente aprendo questa funzione). CF falliti vengono
+        loggati e saltati, non interrompono il lotto. Chiamare da un worker thread
+        (`self._run_inprocess`), non dal thread Tk.
+        """
+        from ade_auth import autentica, seleziona_utenza, Creds, AuthError
+        import fec_anagrafica
+        import fec_download
+
+        if not cf_lista:
+            return
+        cf, pin, pwd, cfst = self._get_creds()
+        profilo = _profilo_da_modalita(self.modalita.get())
+        control = self.control  # creato dal chiamante (stesso pattern di _esegui_in_process)
+
+        def log(text: str):
+            self.root.after(0, self._log, text if text.endswith("\n") else text + "\n")
+
+        controllati = 0
+        falliti: list[str] = []
+
+        # Login studio una sola volta (instradamento sul primo CF della lista),
+        # poi «Cambia Utenza» per ciascun CF in cf_lista, incluso il primo: stesso
+        # schema (login + N cambi utenza) di _deleghe_aggiorna_tutte, ma qui il
+        # login iniziale non conta come controllo già eseguito sul primo CF.
+        creds_iniziali = Creds(nomeutente=cf, pin=pin, password=pwd, cfstudio=cfst,
+                               cf_cliente=cf_lista[0], piva="", profilo=profilo)
+        try:
+            auth = autentica(creds_iniziali, backend="requests", log=lambda _m: None)
+        except AuthError as exc:
+            log(f"\n❌ accesso studio fallito: {exc.dettaglio}")
+            log(f"\n[Completato] 0 deleghe controllate, {len(cf_lista)} non riuscite.")
+            return
+
+        for i, cf_cliente in enumerate(cf_lista, 1):
+            try:
+                control.check()
+            except fec_download.DownloadAnnullato:
+                log("\n⏹  Interrotto: salvo quanto già controllato.")
+                break
+            row = next((r for r in self.deleghe_rows
+                       if r.get("codice_fiscale", "").upper() == cf_cliente.upper()), None)
+            if row is None:
+                continue
+            creds = Creds(nomeutente=cf, pin=pin, password=pwd, cfstudio=cfst,
+                          cf_cliente=cf_cliente, piva="", profilo=profilo)
+            log(f"\n[{i}/{len(cf_lista)}] CF {cf_cliente}…")
+            try:
+                auth = seleziona_utenza(auth, creds, log=lambda _m: None)
+            except AuthError as exc:
+                log(f"   ❌ accesso/utenza: {exc.dettaglio}")
+                falliti.append(cf_cliente)
+                continue
+            try:
+                dati = fec_anagrafica.recupera(auth)
+            except Exception as exc:  # noqa: BLE001
+                log(f"   ⚠️  recupero dati fallito: {exc}")
+                falliti.append(cf_cliente)
+                continue
+            for campo in ("codice_destinatario", "pec", "canale_massivo", "conservazione"):
+                if dati.get(campo):
+                    row[campo] = dati[campo]
+            controllati += 1
+            log("   ✓ canale ricezione/forniture massive controllati")
+
+        if controllati:
+            self._deleghe.save_deleghe(self.deleghe_rows)
+            self.root.after(0, self._deleghe_reload)
+        log(f"\n[Completato] {controllati} deleghe controllate, "
+            f"{len(falliti)} non riuscite"
+            + (f" ({', '.join(falliti)})" if falliti else "."))
+
     # Messaggi testuali con cui l'API di instradamento segnala che la delega non è
     # più valida (scaduta/revocata): non c'è un codice errore dedicato, solo testo
     # libero nel campo `error` della risposta (vedi `_setuserchoice` in ade_auth.py).
