@@ -1,6 +1,6 @@
 # FeC-Plus 🧾
 
-**Versione 0.03 alpha**
+**Versione 0.04 dev** - il README potrebbe non essere aggiornato in fase di "dev"
 
 **FeC-Plus** è uno strumento per automatizzare l'accesso e lo scaricamento dei dati dal portale "Fatture e Corrispettivi" dell'Agenzia delle Entrate, tramite una semplice interfaccia grafica.
 
