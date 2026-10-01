@@ -362,6 +362,11 @@ class FecGui:
         # fra letture (i valori trasmessi sono progressivi) o dati grezzi.
         self.util_da_modalita = tk.StringVar(value="differenza")
         self.avviso_presa_visione = tk.BooleanVar(value=True)
+        # Organizzazione delle cartelle: per ditta (archivio per tipo e anno) o per
+        # sessione (una cartella per ogni lancio).
+        self.cartelle_modalita = tk.StringVar(value="ditta")
+        self.cartelle_anno = tk.BooleanVar(value=True)
+        self._chk_cartelle_anno = None
 
         # Cartelle per tipo di documento (popolate da _load_config): per ogni classe
         # path (override), «personalizza» e «senza sottocartella». Vuoto ⇒ usa std_destdir.
@@ -446,6 +451,10 @@ class FecGui:
         self.estrai_zip_risultati_massivi.set(bool(cfg.get("estrai_zip_risultati_massivi", False)))
         self.popup_fine_task.set(bool(cfg.get("popup_fine_task", True)))
         self.avviso_presa_visione.set(bool(cfg.get("avviso_presa_visione", True)))
+        modalita_cartelle = cfg.get("cartelle_modalita", "ditta")
+        self.cartelle_modalita.set(modalita_cartelle
+                                   if modalita_cartelle in ("ditta", "sessione") else "ditta")
+        self.cartelle_anno.set(bool(cfg.get("cartelle_anno", True)))
         modalita_da = cfg.get("corr_da_modalita", "differenza")
         self.util_da_modalita.set(modalita_da if modalita_da in ("differenza", "grezzi")
                                   else "differenza")
@@ -505,6 +514,8 @@ class FecGui:
             "popup_fine_task": bool(self.popup_fine_task.get()),
             "corr_da_modalita": self.util_da_modalita.get(),
             "avviso_presa_visione": bool(self.avviso_presa_visione.get()),
+            "cartelle_modalita": self.cartelle_modalita.get(),
+            "cartelle_anno": bool(self.cartelle_anno.get()),
             "etichette_deleghe": {
                 "campo1": self.etichetta1_var.get().strip()
                           or ETICHETTE_DELEGHE_DEFAULT["campo1"],
@@ -549,6 +560,41 @@ class FecGui:
         path = vars_["path"].get().strip()
         base = path if (vars_["personalizza"].get() and path) else default
         return base, not bool(vars_["senza_sotto"].get())
+
+    def _config_cartelle(self):
+        """Organizzazione delle cartelle letta dalle Impostazioni. Va chiamata sul
+        thread Tk prima di avviare il lavoro: fissa anche il timestamp del lancio."""
+        import fec_directory
+        from datetime import datetime
+        personalizzate = {}
+        for key, v in self.dirclassi.items():
+            path = v["path"].get().strip() if v["personalizza"].get() else ""
+            senza = bool(v["senza_sotto"].get())
+            if path or senza:
+                personalizzate[key] = (path, senza)
+        return fec_directory.ConfigCartelle(
+            base=self.std_destdir.get().strip() or DEFAULT_DEST_DIR,
+            modalita=self.cartelle_modalita.get(),
+            anno=bool(self.cartelle_anno.get()),
+            sessione=fec_directory.timestamp_sessione(datetime.now()),
+            personalizzate=personalizzate)
+
+    def _destinazione(self, config, chiave, res, cf_cliente, piva, cf_utente, log, *,
+                      anno_periodo=None, per_documento=False):
+        """Destinazione di un output dopo il login, quando P.IVA e denominazione
+        dell'utenza sono note. Non tocca Tk: si può chiamare dal worker."""
+        import fec_directory
+        import fec_deleghe
+        try:
+            deleghe = fec_deleghe.load_deleghe()
+        except Exception:  # noqa: BLE001 - senza anagrafica si usa la sola P.IVA
+            deleghe = []
+        identificativo, denominazione = fec_directory.soggetto(
+            getattr(res, "piva", ""), getattr(res, "denominazione", ""), piva,
+            cf_cliente, cf_utente, deleghe)
+        return fec_directory.risolvi(config, chiave, identificativo or "senza identificativo",
+                                     denominazione, anno_periodo,
+                                     per_documento=per_documento, log=log)
 
     def _materiale_dir_path(self) -> str:
         """Cartella dei file di debug (HAR/dump/log), solo modalità dev: la
@@ -1039,6 +1085,9 @@ class FecGui:
         ttk.Button(frm, text="Sfoglia…", width=10, command=self._std_pick_destdir).grid(row=r, column=2, padx=(6, 0))
 
         r += 1
+        r = self._build_organizzazione_cartelle(frm, r)
+
+        r += 1
         self._build_cartelle_classi(frm, r)
 
         r += 1
@@ -1191,6 +1240,39 @@ class FecGui:
         else:
             self._cartelle_inner.grid_remove()
             self._cartelle_toggle_btn.configure(text="▼  Espandi")
+
+    def _build_organizzazione_cartelle(self, frm: ttk.Widget, row: int) -> int:
+        """Riquadro «Organizzazione delle cartelle»: per ditta o per sessione."""
+        box = ttk.LabelFrame(frm, text=" Organizzazione delle cartelle ", padding=(10, 6))
+        box.grid(row=row, column=0, columnspan=3, sticky="we", pady=(8, 4))
+        ttk.Radiobutton(box, text="Per ditta: Denominazione - P.IVA / tipo di documento",
+                        variable=self.cartelle_modalita, value="ditta",
+                        command=self._aggiorna_cartelle_anno).grid(row=0, column=0, sticky="w")
+        self._chk_cartelle_anno = ttk.Checkbutton(
+            box, text="con una sottocartella per anno", variable=self.cartelle_anno,
+            command=self._update_dest_info)
+        self._chk_cartelle_anno.grid(row=1, column=0, sticky="w", padx=(22, 0))
+        ttk.Radiobutton(box, text="Per sessione: Denominazione - P.IVA / data e ora del "
+                                  "download / tipo di documento",
+                        variable=self.cartelle_modalita, value="sessione",
+                        command=self._aggiorna_cartelle_anno).grid(row=2, column=0, sticky="w")
+        self._aggiorna_cartelle_anno()
+        return row
+
+    def _aggiorna_cartelle_anno(self):
+        if self._chk_cartelle_anno is not None:
+            try:
+                if self.cartelle_modalita.get() == "ditta":
+                    self._chk_cartelle_anno.grid()
+                else:
+                    self._chk_cartelle_anno.grid_remove()
+            except tk.TclError:
+                self._chk_cartelle_anno = None   # finestra Impostazioni già chiusa
+        self._update_dest_info()
+
+    def _cartelle_anno_visibile(self) -> bool:
+        return (self._chk_cartelle_anno is not None
+                and self._chk_cartelle_anno.winfo_manager() == "grid")
 
     def _toggle_cartelle(self):
         """Comprimi/espandi l'elenco «Cartelle per tipo di documento» e ricorda la scelta
@@ -3888,11 +3970,10 @@ class FecGui:
         if not hasattr(self, "std_dest_info"):
             return
         key = TIPO_STD_KEY.get(self.std_tipo.get(), "emesse")
-        base, sotto = self._dest_classe(key)
-        suffisso = ("in una sottocartella per tipo e codice fiscale"
-                    if sotto else "direttamente nella cartella (senza sottocartella)")
-        self.std_dest_info.set(f"{base}\n→ i file saranno salvati {suffisso}.  "
-                               "Modificabile in ⚙ Impostazioni.")
+        import fec_directory
+        chiave = fec_directory.TIPO_CHIAVE.get(key, key)
+        self.std_dest_info.set(fec_directory.descrizione(self._config_cartelle(), chiave)
+                               + "\nModificabile in ⚙ Impostazioni.")
 
     def _run_standard(self):
         cf, pin, pwd, cfst = self._get_creds()
