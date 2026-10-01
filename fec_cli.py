@@ -86,6 +86,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Mostra la finestra del browser (solo backend browser)")
     acc.add_argument("--dest", default=None,
                      help="Cartella di destinazione dei download (default: ./Download)")
+    acc.add_argument("--cartelle", choices=["ditta", "sessione"], default="ditta",
+                     help="Organizzazione: per ditta (tipo e anno) o per sessione (data e ora)")
+    acc.add_argument("--no-anno", action="store_true",
+                     help="Senza sottocartella per anno (solo con --cartelle ditta)")
     acc.add_argument("--includi-scartate-pa", dest="escludi_scartate_pa",
                      action="store_false", default=True,
                      help="Include anche le fatture rifiutate dalla P.A. (default: escluse)")
@@ -159,27 +163,56 @@ _CMD_TIPO = {
 }
 
 
+def _destinazione(args, auth, chiave, anno_periodo=None, per_documento=False):
+    """Cartella di destinazione dopo il login (P.IVA e denominazione note)."""
+    from datetime import datetime
+    import fec_directory
+    import fec_deleghe
+    import fec_download
+    try:
+        deleghe = fec_deleghe.load_deleghe()
+    except Exception:  # noqa: BLE001 - senza anagrafica si usa la sola P.IVA
+        deleghe = []
+    config = fec_directory.ConfigCartelle(
+        base=args.dest or fec_download.DEFAULT_DEST_DIR, modalita=args.cartelle,
+        anno=not args.no_anno, sessione=fec_directory.timestamp_sessione(datetime.now()))
+    identificativo, denominazione = fec_directory.soggetto(
+        getattr(auth, "piva", ""), getattr(auth, "denominazione", ""),
+        getattr(args, "piva", "") or "", getattr(args, "cf_cliente", "") or "",
+        getattr(args, "cf", "") or "", deleghe)
+    return fec_directory.risolvi(config, chiave, identificativo or "senza identificativo",
+                                 denominazione, anno_periodo, per_documento=per_documento)
+
+
 def _dispatch(args, auth, fq):
     """Instrada il comando a fec_queue.esegui_richiesta (spezzettamento periodi)."""
     # Export CSV AdE autonomo: non passa da fec_queue (nessun download di file),
     # ma da fec_utility, che interroga solo le liste.
     if args.comando == "csv-fatture":
+        import fec_directory
         import fec_utility
+        dest = _destinazione(args, auth, "elenchi", fec_directory.anno_da_data(args.dal))
         return fec_utility.elenco_fatture_csv_ade(
             auth, args.cf_cliente, args.piva, args.tipo, args.dal, args.al,
-            dest_dir=args.dest)
+            dest_dir=dest.cartella, sottocartella=False)
 
     tipo = _CMD_TIPO.get(args.comando)
     if tipo is None:
         raise SystemExit(f"Comando sconosciuto: {args.comando}")
     spec = fq.TIPI[tipo]
-    kw = {"cf_cliente": args.cf_cliente, "dest_dir": args.dest}
+    import fec_directory
+    anno = (str(args.anno) if tipo == "bolli" and getattr(args, "anno", None)
+            else fec_directory.anno_da_data(getattr(args, "dal", None)))
+    dest = _destinazione(args, auth, fec_directory.TIPO_CHIAVE[tipo], anno,
+                         per_documento=spec.kind == "download")
+    kw = {"cf_cliente": args.cf_cliente, "dest_dir": dest.cartella, "sottocartella": False}
     if tipo == "ricevute":
         kw["tipo_data"] = args.tipo_data
     if spec.kind == "download":
         kw["escludi_scartate_pa"] = args.escludi_scartate_pa
         kw["estrai_p7m"] = args.estrai_p7m
         kw["csv_ade"] = args.csv_ade
+        kw["per_anno"] = dest.per_anno
     if spec.kind == "invio":
         kw["piva"] = args.piva
     if tipo == "bolli":
@@ -227,6 +260,7 @@ def main(argv=None) -> int:
         print(f"  soggetti: cf_cliente={args.cf_cliente!r} piva={args.piva!r} "
               f"cfstudio={args.cfstudio!r}")
         for k in ("dal", "al", "tipo", "tipo_data", "trimestre", "anno", "dest",
+                  "cartelle", "no_anno",
                   "escludi_scartate_pa", "estrai_p7m", "csv_ade"):
             if hasattr(args, k):
                 print(f"  {k} = {getattr(args, k)!r}")
