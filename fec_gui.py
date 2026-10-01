@@ -4003,73 +4003,78 @@ class FecGui:
                               **{"Data inizio": dal}, **{"Data fine": al}):
             return
 
-        # Cartella e «sottocartella» risolte per la classe di documento (Impostazioni).
-        d_em,  s_em  = self._dest_classe("emesse")
-        d_ri,  s_ri  = self._dest_classe("ricevute")
-        d_te,  s_te  = self._dest_classe("trans_emesse")
-        d_tr,  s_tr  = self._dest_classe("trans_ricevute")
-        d_md,  s_md  = self._dest_classe("messe_disposizione")
+        # Cartelle risolte dopo il login, quando P.IVA e denominazione dell'utenza
+        # sono note; qui si leggono solo le Impostazioni (thread Tk).
+        config = self._config_cartelle()
+        modalita_accesso = self.modalita.get()
+        import fec_directory
 
-        # Tutte le tipologie girano in-process (un solo login), via fec_queue che
-        # spezza i periodi > 3 mesi e unisce i risultati.
         escludi_scartate = bool(self.std_escludi_scartate.get())
         estrai_p7m = bool(self.std_estrai_p7m.get())
         csv_ade = bool(self.std_csv_ade.get())
         includi_trans = bool(self.std_includi_trans.get())
         includi_disposizione = bool(self.std_includi_disposizione.get())
 
+        def _scarica(res, log, fq, ctrl, prog, tipo_richiesta, **extra):
+            dest = self._destinazione(config, tipo_richiesta, res, cfcl, piva, cf, log,
+                                      per_documento=True)
+            esito = fq.esegui_richiesta(res, tipo_richiesta, dal=dal, al=al, cf_cliente=cfcl,
+                                        dest_dir=dest.cartella, sottocartella=False,
+                                        per_anno=dest.per_anno, control=ctrl, log=log,
+                                        progresso=prog, escludi_scartate_pa=escludi_scartate,
+                                        estrai_p7m=estrai_p7m, csv_ade=csv_ade, **extra)
+            return esito, dest
+
+        def _chiudi(esiti_dest, log):
+            """Ultimi passi comuni: `sessione.txt` in modalità sessione, poi la
+            cartella da aprire nel popup (quella del soggetto o del lancio)."""
+            radice = esiti_dest[0][1].radice
+            if config.modalita == "sessione":
+                esiti = [e for e, _ in esiti_dest]
+                fec_directory.scrivi_sessione(radice, {
+                    "Periodo": f"{dal} - {al}",
+                    "Tipi": ", ".join(fq_etichetta(e) for e in esiti),
+                    "Modalità di accesso": modalita_accesso,
+                    "Fatture scaricate": sum(e.fatture for e in esiti),
+                    "Metadati scaricati": sum(e.metadati for e in esiti),
+                    "Saltate": sum(e.saltati for e in esiti),
+                    "Errori": sum(e.errori for e in esiti),
+                    "Non ancora disponibili": sum(e.in_attesa for e in esiti),
+                    "Versione": __version__,
+                })
+                log(f"Riepilogo della sessione in {os.path.join(radice, 'sessione.txt')}")
+            return [radice]
+
+        def fq_etichetta(esito):
+            return os.path.basename(esito.cartella.rstrip("\\/"))
+
+        filtri = {"filtro_piva": filtro_piva, "filtro_cf": filtro_cf}
+
         def _op_emesse(res, log, fq, ctrl, prog):
-            esito_emesse = fq.esegui_richiesta(res, "emesse", dal=dal, al=al, cf_cliente=cfcl,
-                                dest_dir=d_em, sottocartella=s_em, control=ctrl, log=log,
-                                progresso=prog,
-                                escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m, csv_ade=csv_ade,
-                                filtro_piva=filtro_piva, filtro_cf=filtro_cf)
-            esiti = [esito_emesse]
+            esiti = [_scarica(res, log, fq, ctrl, prog, "emesse", **filtri)]
             if includi_trans:
                 log("\n↪  Aggiungo in coda: Transfrontaliere Emesse (stesso periodo)...")
-                esiti.append(fq.esegui_richiesta(res, "trans_emesse", dal=dal, al=al, cf_cliente=cfcl,
-                                    dest_dir=d_te, sottocartella=s_te, control=ctrl, log=log,
-                                    progresso=prog,
-                                    escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m, csv_ade=csv_ade,
-                                    filtro_piva=filtro_piva, filtro_cf=filtro_cf,
-                                    escludi_id_invio=esito_emesse.id_invio_elenco))
-            return esiti
+                esiti.append(_scarica(res, log, fq, ctrl, prog, "trans_emesse",
+                                      escludi_id_invio=esiti[0][0].id_invio_elenco, **filtri))
+            return _chiudi(esiti, log)
 
         def _op_ricevute(res, log, fq, ctrl, prog):
-            esiti = [fq.esegui_richiesta(res, "ricevute", dal=dal, al=al, cf_cliente=cfcl,
-                                tipo_data=tipdata, dest_dir=d_ri, sottocartella=s_ri,
-                                control=ctrl, log=log,
-                                progresso=prog,
-                                escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m, csv_ade=csv_ade,
-                                filtro_piva=filtro_piva, filtro_cf=filtro_cf)]
+            esiti = [_scarica(res, log, fq, ctrl, prog, "ricevute", tipo_data=tipdata, **filtri)]
             if includi_disposizione:
                 log("\n↪  Aggiungo in coda: Messe a Disposizione (stesso periodo)...")
-                esiti.append(fq.esegui_richiesta(res, "messe_disposizione", dal=dal, al=al, cf_cliente=cfcl,
-                                    dest_dir=d_md, sottocartella=s_md, control=ctrl, log=log,
-                                    progresso=prog,
-                                    escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m, csv_ade=csv_ade))
-            return esiti
+                esiti.append(_scarica(res, log, fq, ctrl, prog, "messe_disposizione"))
+            return _chiudi(esiti, log)
+
+        def _op_singolo(tipo_richiesta, **extra):
+            return lambda res, log, fq, ctrl, prog: _chiudi(
+                [_scarica(res, log, fq, ctrl, prog, tipo_richiesta, **extra)], log)
 
         OPS = {
             "Fatture Emesse": _op_emesse,
             "Fatture Ricevute": _op_ricevute,
-            "Transfrontaliere Emesse": lambda res, log, fq, ctrl, prog:
-                fq.esegui_richiesta(res, "trans_emesse", dal=dal, al=al, cf_cliente=cfcl,
-                                    dest_dir=d_te, sottocartella=s_te, control=ctrl, log=log,
-                                    progresso=prog,
-                                    escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m, csv_ade=csv_ade,
-                                    filtro_piva=filtro_piva, filtro_cf=filtro_cf),
-            "Transfrontaliere Ricevute": lambda res, log, fq, ctrl, prog:
-                fq.esegui_richiesta(res, "trans_ricevute", dal=dal, al=al, cf_cliente=cfcl,
-                                    dest_dir=d_tr, sottocartella=s_tr, control=ctrl, log=log,
-                                    progresso=prog,
-                                    escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m, csv_ade=csv_ade,
-                                    filtro_piva=filtro_piva, filtro_cf=filtro_cf),
-            "Messe a Disposizione": lambda res, log, fq, ctrl, prog:
-                fq.esegui_richiesta(res, "messe_disposizione", dal=dal, al=al, cf_cliente=cfcl,
-                                    dest_dir=d_md, sottocartella=s_md, control=ctrl, log=log,
-                                    progresso=prog,
-                                    escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m, csv_ade=csv_ade),
+            "Transfrontaliere Emesse": _op_singolo("trans_emesse", **filtri),
+            "Transfrontaliere Ricevute": _op_singolo("trans_ricevute", **filtri),
+            "Messe a Disposizione": _op_singolo("messe_disposizione"),
         }
         # Quante fasi vedra' l'utente: un blocco di periodo per ogni tipo in coda.
         # `spezza_periodo` e' pura e senza rete: se le date sono invalide solleva
