@@ -153,6 +153,14 @@ TIPO_STD_KEY = {
 # Impostazioni; è una preferenza di sola GUI salvata in fec_settings.json).
 ETICHETTE_DELEGHE_DEFAULT = {"campo1": "Etichetta 1", "campo2": "Etichetta 2"}
 
+TESTO_PRESA_VISIONE = (
+    "Scaricare il file di una fattura messa a disposizione equivale a prenderne "
+    "visione sul portale: da quel momento la fattura si considera ricevuta ai fini "
+    "fiscali, con la data di presa visione come data di ricezione.\n\n"
+    "Il portale registra la presa visione anche quando il file viene solo "
+    "visualizzato. Prima di procedere conviene accertarsi con il cliente che sia il "
+    "momento giusto.")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 class ProgressoGUI:
@@ -353,6 +361,7 @@ class FecGui:
         # Distributori automatici nell'export corrispettivi: venduto per differenza
         # fra letture (i valori trasmessi sono progressivi) o dati grezzi.
         self.util_da_modalita = tk.StringVar(value="differenza")
+        self.avviso_presa_visione = tk.BooleanVar(value=True)
 
         # Cartelle per tipo di documento (popolate da _load_config): per ogni classe
         # path (override), «personalizza» e «senza sottocartella». Vuoto ⇒ usa std_destdir.
@@ -436,6 +445,7 @@ class FecGui:
         self.std_includi_disposizione.set(bool(cfg.get("std_includi_disposizione", False)))
         self.estrai_zip_risultati_massivi.set(bool(cfg.get("estrai_zip_risultati_massivi", False)))
         self.popup_fine_task.set(bool(cfg.get("popup_fine_task", True)))
+        self.avviso_presa_visione.set(bool(cfg.get("avviso_presa_visione", True)))
         modalita_da = cfg.get("corr_da_modalita", "differenza")
         self.util_da_modalita.set(modalita_da if modalita_da in ("differenza", "grezzi")
                                   else "differenza")
@@ -494,6 +504,7 @@ class FecGui:
             "estrai_zip_risultati_massivi": bool(self.estrai_zip_risultati_massivi.get()),
             "popup_fine_task": bool(self.popup_fine_task.get()),
             "corr_da_modalita": self.util_da_modalita.get(),
+            "avviso_presa_visione": bool(self.avviso_presa_visione.get()),
             "etichette_deleghe": {
                 "campo1": self.etichetta1_var.get().strip()
                           or ETICHETTE_DELEGHE_DEFAULT["campo1"],
@@ -1061,6 +1072,12 @@ class FecGui:
             row=r, column=0, columnspan=3, sticky="w", pady=(4, 0))
 
         r += 1
+        ttk.Checkbutton(frm, text="Avvisa che scaricare le fatture messe a disposizione "
+                                  "ne registra la presa visione",
+                        variable=self.avviso_presa_visione).grid(
+            row=r, column=0, columnspan=3, sticky="w", pady=(4, 0))
+
+        r += 1
         ttk.Checkbutton(frm, text="Download Standard: includi fatture transfrontaliere "
                                   "(default con tipo «Fatture Emesse»)",
                         variable=self.std_includi_trans).grid(
@@ -1069,7 +1086,8 @@ class FecGui:
         r += 1
         ttk.Checkbutton(frm, text="Download Standard: includi fatture Messe a Disposizione "
                                   "(default con tipo «Fatture Ricevute»)",
-                        variable=self.std_includi_disposizione).grid(
+                        variable=self.std_includi_disposizione,
+                        command=self._includi_disposizione_cambiato).grid(
             row=r, column=0, columnspan=3, sticky="w", pady=(4, 0))
 
         if DEV_MODE:
@@ -1352,7 +1370,7 @@ class FecGui:
             cfg[chiave] = valore
             fec_store.save_settings(cfg)
         except Exception as exc:  # noqa: BLE001 - una preferenza persa non blocca la GUI
-            self._log(f"⚠️  Preferenza non salvata ({chiave}): {exc}")
+            self._log(f"⚠️  Preferenza non salvata ({chiave}): {exc}\n")
 
     def _imposta_console(self, aperta: bool):
         """Mostra o nasconde la console. Il riquadro inferiore resta nel
@@ -3683,7 +3701,8 @@ class FecGui:
             "Messe a Disposizione",
         ])
         cb.pack(side=tk.LEFT)
-        cb.bind("<<ComboboxSelected>>", self._std_tipo_changed)
+        cb.bind("<<ComboboxSelected>>", self._std_tipo_selezionato)
+        self._std_tipo_cb = cb
 
         self._chk_tipo_frame = ttk.Frame(tipo_row)
         self._chk_tipo_frame.pack(side=tk.LEFT, padx=(14, 0))
@@ -3692,7 +3711,8 @@ class FecGui:
             variable=self.std_includi_trans)
         self._chk_includi_disposizione = ttk.Checkbutton(
             self._chk_tipo_frame, text="Includi fatture Messe a Disposizione (stesso periodo)",
-            variable=self.std_includi_disposizione)
+            variable=self.std_includi_disposizione,
+            command=self._includi_disposizione_cambiato)
 
         r += 1; self._row(f, r, "CF Cliente:", self.std_cf_cl)
         r += 1; self._row(f, r, "P.IVA (opzionale):", self.std_piva)
@@ -3809,6 +3829,58 @@ class FecGui:
             self._chk_includi_disposizione.pack_forget()
 
         self._update_dest_info()
+
+    def _avviso_presa_visione(self):
+        """Avvisa che scaricare le messe a disposizione ne registra la presa visione.
+        Ritorna la finestra aperta, o None se l'utente l'ha disattivato."""
+        if not self.avviso_presa_visione.get():
+            return None
+        win = tk.Toplevel(self.root)
+        win.title("Messe a disposizione: presa visione")
+        win.transient(self.root)
+        frm = ttk.Frame(win, padding=(16, 14))
+        frm.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(frm, text=TESTO_PRESA_VISIONE, wraplength=460,
+                  justify="left").pack(anchor="w")
+        non_mostrare = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frm, text="Non mostrare più",
+                        variable=non_mostrare).pack(anchor="w", pady=(12, 0))
+
+        def _chiudi():
+            if non_mostrare.get():
+                self.avviso_presa_visione.set(False)
+                self._salva_preferenza("avviso_presa_visione", False)
+            win.destroy()
+
+        ttk.Button(frm, text="Ho capito", command=_chiudi).pack(anchor="e", pady=(12, 0))
+        win.protocol("WM_DELETE_WINDOW", _chiudi)
+        win.bind("<Escape>", lambda _e: _chiudi())
+        win.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_width()) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - win.winfo_height()) // 3
+        win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        try:
+            win.grab_set()
+        except tk.TclError:
+            pass   # finestra non ancora visibile (root nascosta): l'avviso resta valido
+        win.non_mostrare = non_mostrare
+        win.chiudi = _chiudi
+        return win
+
+    def _std_tipo_selezionato(self, _evento=None):
+        """Scelta dell'utente nella combobox del tipo: a differenza di
+        _std_tipo_changed non viene chiamata in costruzione, quindi può avvisare."""
+        self._std_tipo_changed()
+        if self.std_tipo.get() == "Messe a Disposizione":
+            self._avviso_presa_visione()
+
+    def _includi_disposizione_cambiato(self):
+        if self.std_includi_disposizione.get():
+            self._avviso_presa_visione()
+
+    def _mass_tipo_selezionato(self, _evento=None):
+        if self.mass_tipo.get() == "Ft. Messe a Disposizione":
+            self._avviso_presa_visione()
 
     def _update_dest_info(self):
         """Aggiorna l'etichetta «Salvataggio in:» con la cartella risolta dalle
@@ -3959,13 +4031,14 @@ class FecGui:
         self.mass_al      = tk.StringVar()
 
         r = 0
-        self._combo(f, r, "Tipo richiesta:", self.mass_tipo, [
+        self._mass_tipo_cb = self._combo(f, r, "Tipo richiesta:", self.mass_tipo, [
             "Ft. Emesse",
             "Ft. Ricevute per Data Emissione",
             "Ft. Ricevute per Data Ricezione",
             "Ft. Messe a Disposizione",
             "Corrispettivi",
         ])
+        self._mass_tipo_cb.bind("<<ComboboxSelected>>", self._mass_tipo_selezionato)
         r += 1; self._row(f, r, "CF Cliente:", self.mass_cfcl)
         r += 1; self._row(f, r, "P.IVA Cliente (opzionale):", self.mass_piva)
         r += 1; r = self._build_date_range(f, r, self.mass_dal, self.mass_al, "%Y-%m-%d") - 1

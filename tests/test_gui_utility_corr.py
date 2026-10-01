@@ -31,6 +31,7 @@ class TestUtilityDistributori(unittest.TestCase):
 
     def setUp(self):
         self.protezione = DatiRealiProtetti().__enter__()
+        self.addCleanup(self.protezione.__exit__, None, None, None)
         self.salva = patch.object(fec_store, "save_settings").start()
         patch.object(fec_store, "save_credentials").start()
         self.addCleanup(patch.stopall)
@@ -41,7 +42,6 @@ class TestUtilityDistributori(unittest.TestCase):
     def tearDown(self):
         self.root.destroy()
         patch.stopall()
-        self.protezione.__exit__(None, None, None)
 
     def test_scelta_visibile_solo_coi_corrispettivi(self):
         self.app.util_tipo.set("Corrispettivi")

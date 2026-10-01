@@ -48,7 +48,8 @@ SETTINGS_KEYS = ("login_backend", "browser_headless", "modalita",
                  "std_includi_trans", "std_includi_disposizione",
                  "cred_espanse", "cartelle_espanse", "estrai_zip_risultati_massivi",
                  "popup_fine_task", "etichette_deleghe", "materiale_dir",
-                 "deleghe_sync_ultima_data", "corr_da_modalita")
+                 "deleghe_sync_ultima_data", "corr_da_modalita",
+                 "avviso_presa_visione")
 
 # Segreto "leggero" incluso nel codice → cifratura portabile (nessun OS/keyring), ma
 # obfuscation-grade. Cambiarlo invalida i file credenziali già salvati.
