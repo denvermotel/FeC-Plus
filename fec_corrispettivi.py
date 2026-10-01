@@ -212,7 +212,7 @@ def estrai_riga_pivot(codice: str, voce: dict, dettaglio: dict | None) -> dict:
 
 def e_annullato_ca(voce: dict) -> bool:
     """Invio carburanti annullato (`statoIdInvio` = 1): non va nei totali."""
-    return _s(voce, "statoIdInvio") == "1"
+    return _importo(_campo(voce, "statoIdInvio")) == 1
 
 
 def estrai_riga_ca(voce: dict, dettaglio: dict | None) -> dict:
@@ -294,7 +294,10 @@ def _modalita_da(voce: dict, dettaglio: dict | None = None) -> str:
 
 def _nota_divergenza(voce: dict, dettaglio: dict | None) -> str:
     """Avviso divergenza tra venduto del dettaglio e importo dell'elenco."""
-    importo = _importo(_campo(voce, "importo"))
+    importo_elenco = _campo(voce, "importo")
+    if importo_elenco in (None, ""):
+        return ""
+    importo = _importo(importo_elenco)
     venduto_detail = _campo(_dati_da(dettaglio), "venduto")
     if venduto_detail not in (None, ""):
         venduto_detail_val = _importo(venduto_detail)
@@ -356,6 +359,16 @@ def righe_da_differenza(invii: list[tuple[dict, dict | None]],
             riga = _base_da(voce, det)
             riga["Totale venduto (contatore)"] = contatore
             riga["Note"] = ""
+            assente = (modalita.upper() == "CUMULATO"
+                       and _campo(voce, "importo") in (None, "")
+                       and _campo(_dati_da(det), "venduto") in (None, ""))
+            if assente:
+                riga["Totale venduto (contatore)"] = None
+                riga["Lettura precedente"] = None
+                riga["Venduto dell'intervallo"] = None
+                riga["Note"] = "Contatore assente nell'invio: riga non calcolata."
+                righe.append(riga)
+                continue
             if modalita.upper() != "CUMULATO":
                 riga["Lettura precedente"] = None
                 riga["Venduto dell'intervallo"] = contatore
@@ -370,6 +383,7 @@ def righe_da_differenza(invii: list[tuple[dict, dict | None]],
                 riga["Lettura precedente"] = prec
                 riga["Venduto dell'intervallo"] = round(contatore - prec, 2)
                 if contatore < prec:
+                    riga["Venduto dell'intervallo"] = None
                     riga["Note"] = ("Contatore inferiore alla lettura precedente "
                                     "(azzeramento o sostituzione della scheda?): verificare.")
             riga["Note"] = _unisci_note(riga["Note"], _nota_divergenza(voce, det))
@@ -467,7 +481,12 @@ def elenco_completo(scarica, dal: str, al: str, etichetta: str, log=print,
 def _frazionato(scarica, dal, al, etichetta, log, avvisi, livello) -> list[dict]:
     risultato: list[dict] = []
     for d, a in spezza_periodo(dal, al, "%d%m%Y", **_LIVELLI[livello]):
-        voci, totale = scarica(d, a)
+        try:
+            voci, totale = scarica(d, a)
+        except DownloadError as exc:
+            avvisi.append(f"{etichetta} {d}-{a}: elenco non ottenuto ({exc}).")
+            log(f"   ⚠️  {avvisi[-1]}")
+            continue
         if totale is not None and len(voci) < totale:
             if livello + 1 < len(_LIVELLI):
                 risultato.extend(_frazionato(scarica, d, a, etichetta, log, avvisi,
@@ -511,7 +530,8 @@ def _dettagli(auth, codice: str, voci: list[dict], piva: str, control, log
     return coppie
 
 
-def _letture_precedenti_da(auth, piva: str, dal: str, log) -> dict[str, float]:
+def _letture_precedenti_da(auth, piva: str, dal: str, log,
+                           avvisi: list | None = None) -> dict[str, float]:
     """Contatori dei distributori nei 3 mesi prima del periodo (prima lettura utile)."""
     inizio = datetime.strptime(dal, "%d%m%Y")
     p_dal = (inizio - relativedelta(months=3)).strftime("%d%m%Y")
@@ -519,7 +539,7 @@ def _letture_precedenti_da(auth, piva: str, dal: str, log) -> dict[str, float]:
     try:
         voci = elenco_completo(lambda d, a: elenco_blocco(auth, "DA", d, a, piva, log),
                                p_dal, p_al, "Distributori automatici (letture precedenti)",
-                               log=log)
+                               log=log, avvisi=avvisi)
     except DownloadError as exc:
         log(f"   ⚠️  Letture precedenti dei distributori non disponibili ({exc}).")
         return {}
@@ -527,7 +547,8 @@ def _letture_precedenti_da(auth, piva: str, dal: str, log) -> dict[str, float]:
 
 
 def _scrivi_tipo(auth, codice: str, voci: list[dict], piva: str, dal: str, al: str,
-                 cartella: str, control, log, modalita_da: str) -> list[str]:
+                 cartella: str, control, log, modalita_da: str,
+                 avvisi: list | None = None) -> list[str]:
     tipo = TIPI[codice]
     if codice == "CA":
         annullati = [v for v in voci if e_annullato_ca(v)]
@@ -540,7 +561,8 @@ def _scrivi_tipo(auth, codice: str, voci: list[dict], piva: str, dal: str, al: s
     escludi: tuple = ()
     testo: list[str] = []
     if codice == "DA" and modalita_da == "differenza":
-        righe = righe_da_differenza(coppie, _letture_precedenti_da(auth, piva, dal, log))
+        righe = righe_da_differenza(
+            coppie, _letture_precedenti_da(auth, piva, dal, log, avvisi))
         fisse, num, testo, escludi = (COLONNE_FISSE_DA, COLONNE_NUM_DA_DIFF, ["Note"],
                                       NON_SOMMARE_DA)
     elif codice == "DA":
@@ -615,7 +637,8 @@ def elenco_corrispettivi_excel(auth, cf_cliente: str, piva: str, dal: str, al: s
     for codice, voci in voci_per_tipo.items():
         if voci:
             esito.percorsi.extend(_scrivi_tipo(auth, codice, voci, piva, dal, al,
-                                               cartella, control, log, modalita_da))
+                                               cartella, control, log, modalita_da,
+                                               esito.avvisi))
     log(f"\nGenerati {len(esito.percorsi)} file.")
     return esito
 

@@ -139,6 +139,8 @@ class TestCarburanti(unittest.TestCase):
     def test_annullato(self):
         self.assertTrue(fc.e_annullato_ca({"statoIdInvio": 1}))
         self.assertTrue(fc.e_annullato_ca({"statoIdInvio": "1"}))
+        self.assertTrue(fc.e_annullato_ca({"statoIdInvio": 1.0}))
+        self.assertTrue(fc.e_annullato_ca({"statoIdInvio": "1.0"}))
         self.assertFalse(fc.e_annullato_ca({"statoIdInvio": 0}))
         self.assertFalse(fc.e_annullato_ca({}))
 

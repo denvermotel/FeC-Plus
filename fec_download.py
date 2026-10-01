@@ -462,8 +462,8 @@ def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
         prima = len(fatture)
         fatture = [f for f in fatture if _id_invio(f) not in escludi_id_invio]
         if len(fatture) < prima:
-            log(f"{prima - len(fatture)} fatture già presenti tra le emesse di questo "
-                "download: saltate.")
+            log(f"{prima - len(fatture)} fatture già comprese in un elenco precedente "
+                "di questo download: saltate.")
 
     # Le tacche del nastro sono le fatture che verranno DAVVERO tentate: il
     # totale si annuncia dopo il filtro, non prima.

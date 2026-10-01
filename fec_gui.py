@@ -4843,10 +4843,11 @@ class FecGui:
                     log(f"   (periodo saltato: {exc})")
             if avvisi:
                 testo = "\n".join(avvisi[:15]) + ("\n..." if len(avvisi) > 15 else "")
-                self.root.after(0, messagebox.showwarning,
-                                "Corrispettivi: elenchi incompleti",
-                                "Il portale ha restituito elenchi incompleti anche "
-                                f"frazionando il periodo:\n\n{testo}")
+                titolo = "Corrispettivi: elenchi incompleti"
+                corpo = ("Il portale ha restituito elenchi incompleti anche "
+                         f"frazionando il periodo:\n\n{testo}")
+                self.root.after(0, lambda: messagebox.showwarning(
+                    titolo, corpo, parent=self.root))
             return percorsi
 
         self._esegui_in_process(cfcl, piva, _profilo_da_modalita(self.modalita.get()),
@@ -4889,6 +4890,9 @@ class FecGui:
             if tipo == "corrispettivi":
                 import fec_corrispettivi
                 piva_eff = piva or (getattr(res, "piva", "") or "").strip()
+                if not piva_eff:
+                    log("P.IVA non disponibile: dump dei corrispettivi non eseguito.")
+                    return
                 fec_corrispettivi.dump_json(res, piva_eff, dal, al,
                                             dest_dir=materiale, log=log)
             else:

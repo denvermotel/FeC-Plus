@@ -66,6 +66,34 @@ class TestDifferenza(unittest.TestCase):
         righe = fc.righe_da_differenza(
             [(_voce("10", "03/07/2026 10:00", "100,00"), None)], {"M1": 95116.94})
         self.assertIn("inferiore", righe[0]["Note"])
+        self.assertIsNone(righe[0]["Venduto dell'intervallo"])
+
+    def test_dopo_il_calo_la_base_e_il_contatore_basso(self):
+        righe = fc.righe_da_differenza(
+            [(_voce("10", "03/07/2026 10:00", "100,00"), None),
+             (_voce("11", "04/07/2026 10:00", "130,00"), None)], {"M1": 95116.94})
+        self.assertIsNone(righe[0]["Venduto dell'intervallo"])
+        self.assertEqual(righe[1]["Lettura precedente"], 100.0)
+        self.assertEqual(righe[1]["Venduto dell'intervallo"], 30.0)
+
+    def test_nessuna_divergenza_se_manca_importo_elenco(self):
+        righe = fc.righe_da_differenza(
+            [({"idInvio": "1", "timeRilevazione": "03/07/2026 10:00",
+               "matricolaDispositivo": "M1", "modalitaRilevazione": "CUMULATO"},
+              _dettaglio("12,00"))], {"M1": 10.0})
+        self.assertNotIn("differisce", righe[0]["Note"])
+
+    def test_contatore_assente_riga_non_calcolata_e_base_invariata(self):
+        vuota = {"idInvio": "2", "timeRilevazione": "04/07/2026 10:00",
+                 "matricolaDispositivo": "M1", "modalitaRilevazione": "CUMULATO"}
+        righe = fc.righe_da_differenza(
+            [(_voce("1", "03/07/2026 10:00", "110,00"), None), (vuota, None),
+             (_voce("3", "05/07/2026 10:00", "150,00"), None)], {"M1": 100.0})
+        self.assertIsNone(righe[1]["Totale venduto (contatore)"])
+        self.assertIsNone(righe[1]["Venduto dell'intervallo"])
+        self.assertIn("Contatore assente", righe[1]["Note"])
+        self.assertEqual(righe[2]["Lettura precedente"], 110.0)
+        self.assertEqual(righe[2]["Venduto dell'intervallo"], 40.0)
 
     def test_venduto_dall_elenco_prima_che_dal_dettaglio(self):
         self.assertEqual(fc.venduto_da(_voce("1", "", "10,00"), _dettaglio("12,00")), 10.0)

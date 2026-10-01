@@ -36,6 +36,11 @@ class TestSpezzaPeriodo(unittest.TestCase):
         with self.assertRaises(fq.DownloadError):
             fq.spezza_periodo("01012026", "01022027", max_giorni=7)
 
+    def test_max_giorni_non_valido(self):
+        for valore in (0, -3):
+            with self.assertRaises(fq.DownloadError):
+                fq.spezza_periodo("01012026", "20012026", max_giorni=valore)
+
 
 if __name__ == "__main__":
     unittest.main()

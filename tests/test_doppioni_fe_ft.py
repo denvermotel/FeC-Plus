@@ -45,7 +45,7 @@ class TestScaricaDaListaIdInvio(unittest.TestCase):
                                      escludi_id_invio={"100"})
         self.assertEqual(esito, (2, 2))
         self.assertEqual(len(sessione.url), 1 + 2 * 2)
-        self.assertTrue(any("già presenti tra le emesse" in r for r in righe))
+        self.assertTrue(any("già comprese" in r for r in righe))
 
     def test_senza_id_non_si_salta_nulla(self):
         esito = fd._scarica_da_lista(Auth(SessioneElenco({"fatture": [fattura(1)]})),

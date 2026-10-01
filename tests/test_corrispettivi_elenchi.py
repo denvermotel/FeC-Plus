@@ -102,6 +102,22 @@ class TestElencoCompleto(unittest.TestCase):
         self.assertEqual(len(avvisi), 1)
         self.assertIn("1 su 9", avvisi[0])
 
+    def test_sottoblocco_senza_elenco_non_blocca_gli_altri(self):
+        def scarica(d, a):
+            if (d, a) == ("01012026", "31032026"):
+                return [{}] * 2, 3
+            if d == "01022026":
+                raise fec_download.DownloadError("avviso AdE")
+            return [{"n": d}], 1
+
+        avvisi = []
+        voci = fc.elenco_completo(scarica, "01012026", "31032026", "RT",
+                                  log=lambda *_: None, avvisi=avvisi)
+        self.assertEqual([v["n"] for v in voci], ["01012026", "01032026"])
+        self.assertEqual(len(avvisi), 1)
+        self.assertIn("01022026-28022026", avvisi[0])
+        self.assertIn("elenco non ottenuto", avvisi[0])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -84,10 +84,12 @@ def spezza_periodo(dal: str, al: str, fmt: str = "%d%m%Y",
             f"(da {dal} il limite è {limite.strftime(fmt)}). "
             "Riduci il periodo ed esegui più richieste.")
 
+    if max_giorni is not None and max_giorni < 1:
+        raise DownloadError("Blocchi di giorni non validi.")
     blocchi: list[tuple[str, str]] = []
     start = d0
     while start <= a0:
-        if max_giorni:
+        if max_giorni is not None:
             end = min(start + timedelta(days=max_giorni - 1), a0)
         else:
             end = min(start + relativedelta(months=max_mesi) - timedelta(days=1), a0)
