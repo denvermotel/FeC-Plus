@@ -8,6 +8,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -47,6 +48,22 @@ class TestPredisposizione(unittest.TestCase):
                                               ("esito", fec_download.ESITO_OK)])
         self.assertTrue(any("72 ore" in r for r in righe))
         self.assertTrue(any("non ancora disponibil" in r for r in righe))
+
+    def test_non_chiama_e_scartata_pa_se_in_predisposizione(self):
+        sessione = SessioneElenco({"fatture": [
+            fattura(1, fileDownload={"fileDownload": 2})]})
+        spia = ProgressoSpia()
+        righe = []
+        with patch.object(fec_download, '_e_scartata_pa') as mock_scartata:
+            esito = fec_download._scarica_da_lista(
+                Auth(sessione), "http://x/lista", self.tmp, log=righe.append,
+                escludi_scartate_pa=True, progresso=spia)
+        self.assertEqual(esito, (0, 0))
+        # _e_scartata_pa non dovrebbe mai essere chiamata per fatture in predisposizione
+        mock_scartata.assert_not_called()
+        # L'unico esito atteso è SALTATO
+        self.assertEqual(spia.solo("esito"), [("esito", fec_download.ESITO_SALTATO)])
+        self.assertTrue(any("72 ore" in r for r in righe))
 
 
 if __name__ == "__main__":

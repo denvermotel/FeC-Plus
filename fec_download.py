@@ -452,16 +452,16 @@ def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
             control.check()   # pausa/annullamento cooperativo tra un file e l'altro
         fattura_file = fattura["tipoInvio"] + fattura["idFattura"]
 
-        if escludi_scartate_pa and _e_scartata_pa(auth, fattura_file, log):
-            log(f"   ⏭️  Fattura {fattura_file} rifiutata dalla P.A.: saltata.")
-            if progresso is not None:
-                progresso.esito(ESITO_SALTATO)
-            continue
-
         if _in_predisposizione(fattura):
             n_in_attesa += 1
             log(f"   ⏳ Fattura {fattura_file}: file in preparazione presso l'AdE "
                 "(disponibile entro 72 ore dalla consegna), saltata.")
+            if progresso is not None:
+                progresso.esito(ESITO_SALTATO)
+            continue
+
+        if escludi_scartate_pa and _e_scartata_pa(auth, fattura_file, log):
+            log(f"   ⏭️  Fattura {fattura_file} rifiutata dalla P.A.: saltata.")
             if progresso is not None:
                 progresso.esito(ESITO_SALTATO)
             continue
