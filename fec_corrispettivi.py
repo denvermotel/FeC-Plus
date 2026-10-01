@@ -18,15 +18,21 @@ from __future__ import annotations
 
 __version__ = "0.04 dev"
 
+import json
+import os
 import re
 import requests
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+
+from dateutil.relativedelta import relativedelta
 
 from ade_auth import IVASERVIZI, unix_time
-from fec_download import DownloadError, HTTP_TIMEOUT, controlla_avviso_elenco
+from fec_download import (_cartella, Controllo, DownloadError, HTTP_TIMEOUT,  # noqa: F401
+                          controlla_avviso_elenco)
 from fec_queue import spezza_periodo
-from fec_utility import _campo, _data_it, _importo, _righe_riepilogo_iva
+from fec_utility import (NessunDato, _campo, _data_it, _importo, _ordina_chiavi_pivot,
+                         _righe_riepilogo_iva, _scrivi_xlsx)
 
 BASE = f"{IVASERVIZI}/cons/cons-services/rs/corrispettivi"
 
@@ -472,3 +478,182 @@ def _frazionato(scarica, dal, al, etichetta, log, avvisi, livello) -> list[dict]
             log(f"   ⚠️  {avvisi[-1]}")
         risultato.extend(voci)
     return risultato
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Export Excel
+# ─────────────────────────────────────────────────────────────────────────────
+
+MODALITA_DA = ("differenza", "grezzi")
+
+
+@dataclass
+class EsitoCorrispettivi:
+    percorsi: list[str] = field(default_factory=list)
+    avvisi: list[str] = field(default_factory=list)
+
+
+def _dettagli(auth, codice: str, voci: list[dict], piva: str, control, log
+              ) -> list[tuple[dict, dict | None]]:
+    coppie: list[tuple[dict, dict | None]] = []
+    for i, voce in enumerate(voci, start=1):
+        if control:
+            control.check()
+        det = None
+        if _campo(voce, "dettaglio", default=True):
+            det = dettaglio(auth, codice, voce, piva)
+            if det is None:
+                log(f"   ⚠️  Dettaglio {codice} {_s(voce, 'idInvio', 'id', 'idUnivoco')} "
+                    "non ottenuto: riga coi soli totali di elenco.")
+        coppie.append((voce, det))
+        if i % 10 == 0 or i == len(voci):
+            log(f"  Dettaglio {TIPI[codice].etichetta}: {i}/{len(voci)}")
+    return coppie
+
+
+def _letture_precedenti_da(auth, piva: str, dal: str, log) -> dict[str, float]:
+    """Contatori dei distributori nei 3 mesi prima del periodo (prima lettura utile)."""
+    inizio = datetime.strptime(dal, "%d%m%Y")
+    p_dal = (inizio - relativedelta(months=3)).strftime("%d%m%Y")
+    p_al = (inizio - timedelta(days=1)).strftime("%d%m%Y")
+    try:
+        voci = elenco_completo(lambda d, a: elenco_blocco(auth, "DA", d, a, piva, log),
+                               p_dal, p_al, "Distributori automatici (letture precedenti)",
+                               log=log)
+    except DownloadError as exc:
+        log(f"   ⚠️  Letture precedenti dei distributori non disponibili ({exc}).")
+        return {}
+    return letture_precedenti(voci, inizio)
+
+
+def _scrivi_tipo(auth, codice: str, voci: list[dict], piva: str, dal: str, al: str,
+                 cartella: str, control, log, modalita_da: str) -> list[str]:
+    tipo = TIPI[codice]
+    if codice == "CA":
+        annullati = [v for v in voci if e_annullato_ca(v)]
+        if annullati:
+            log(f"   {len(annullati)} invii carburanti annullati: esclusi.")
+        voci = [v for v in voci if not e_annullato_ca(v)]
+        if not voci:
+            return []
+    coppie = _dettagli(auth, codice, voci, piva, control, log)
+    escludi: tuple = ()
+    testo: list[str] = []
+    if codice == "DA" and modalita_da == "differenza":
+        righe = righe_da_differenza(coppie, _letture_precedenti_da(auth, piva, dal, log))
+        fisse, num, testo, escludi = (COLONNE_FISSE_DA, COLONNE_NUM_DA_DIFF, ["Note"],
+                                      NON_SOMMARE_DA)
+    elif codice == "DA":
+        righe = righe_da_grezzi(coppie)
+        fisse, num = COLONNE_FISSE_DA, [nome for nome, _ in CAMPI_DA_GREZZI]
+    elif codice == "CA":
+        righe = [estrai_riga_ca(v, d) for v, d in coppie]
+        fisse, num = COLONNE_FISSE_CA, COLONNE_NUM_CA
+    else:
+        righe = [estrai_riga_pivot(codice, v, d) for v, d in coppie]
+        fisse, num = COLONNE_FISSE, COLONNE_NUM
+
+    gruppi: dict[str, list[dict]] = {}
+    for riga in righe:
+        gruppi.setdefault(riga["_gruppo"], []).append(riga)
+    percorsi: list[str] = []
+    for gruppo, righe_g in sorted(gruppi.items()):
+        righe_g.sort(key=lambda r: r["_ordinamento"])
+        chiavi = _ordina_chiavi_pivot({k for r in righe_g for k in r["iva"]})
+        percorso = os.path.join(cartella, nome_file(piva, dal, al, codice, gruppo))
+        _scrivi_xlsx(percorso, fisse, chiavi, num, testo, righe_g,
+                     titolo=tipo.etichetta[:31], escludi_da_totali=escludi)
+        log(f"File «{tipo.etichetta}» ({len(righe_g)} righe"
+            + (f", {gruppo}" if gruppo else "") + f"): {percorso}")
+        percorsi.append(percorso)
+    return percorsi
+
+
+def elenco_corrispettivi_excel(auth, cf_cliente: str, piva: str, dal: str, al: str, *,
+                               dest_dir: str | None = None, sottocartella: bool = True,
+                               control: "Controllo | None" = None, log=print,
+                               modalita_da: str = "differenza") -> EsitoCorrispettivi:
+    """
+    Excel «Elenco corrispettivi» per il periodo [dal, al] (GGMMAAAA): un file per
+    canale e dispositivo (o uno unico per documenti commerciali online e registratori
+    di cassa). Per i distributori automatici `modalita_da` sceglie fra il venduto per
+    differenza fra letture e i dati grezzi del dettaglio.
+    """
+    piva = (piva or "").strip()
+    if not piva:
+        raise DownloadError("Per i corrispettivi la P.IVA è obbligatoria (fa parte "
+                            "dell'indirizzo delle chiamate AdE) e non è stato possibile "
+                            "ricavarla dall'utenza di lavoro attiva: indicala a mano.")
+    if modalita_da not in MODALITA_DA:
+        raise DownloadError(f"Modalità distributori automatici sconosciuta: {modalita_da!r}.")
+    esito = EsitoCorrispettivi()
+    blocchi = spezza_periodo(dal, al, "%d%m%Y")
+    log(f"Elenco corrispettivi per P.IVA {piva}  ({dal} -> {al})"
+        + (f"  [{len(blocchi)} blocchi]" if len(blocchi) > 1 else ""))
+
+    voci_per_tipo: dict[str, list[dict]] = {codice: [] for codice in TIPI}
+    for b_dal, b_al in blocchi:
+        if control:
+            control.check()
+        sint = sintesi(auth, b_dal, b_al, piva)
+        for codice, tipo in TIPI.items():
+            n = int(_importo(_campo(sint, tipo.campo_sintesi, default=0)))
+            if n <= 0:
+                continue
+            log(f"  {b_dal} -> {b_al}: {n} invii «{tipo.etichetta}», scarico l'elenco...")
+            voci_per_tipo[codice].extend(elenco_completo(
+                lambda d, a, c=codice: elenco_blocco(auth, c, d, a, piva, log),
+                b_dal, b_al, tipo.etichetta, log=log, avvisi=esito.avvisi))
+
+    totale = sum(len(v) for v in voci_per_tipo.values())
+    log(f"Trovati {totale} invii nell'intervallo.")
+    if not totale:
+        raise NessunDato("Nessun corrispettivo trovato nell'intervallo richiesto: "
+                         "nessun file Excel generato.")
+
+    cartella = _cartella(dest_dir, "ElencoCorrispettivi", cf_cliente, sottocartella)
+    for codice, voci in voci_per_tipo.items():
+        if voci:
+            esito.percorsi.extend(_scrivi_tipo(auth, codice, voci, piva, dal, al,
+                                               cartella, control, log, modalita_da))
+    log(f"\nGenerati {len(esito.percorsi)} file.")
+    return esito
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dump dei JSON reali (solo sviluppo): servono a confermare i nomi dei campi dei
+# canali non ancora visti su dati veri. Contengono dati reali: restano fuori da Git.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def dump_json(auth, piva: str, dal: str, al: str, dest_dir: str, log=print) -> list[str]:
+    """Sintesi, primo elenco e primo dettaglio di ogni canale con invii nel periodo."""
+    b_dal, b_al = spezza_periodo(dal, al, "%d%m%Y")[0]
+    os.makedirs(dest_dir, exist_ok=True)
+    percorsi: list[str] = []
+
+    def _salva(nome: str, dati) -> None:
+        percorso = os.path.join(dest_dir, nome)
+        with open(percorso, "w", encoding="utf-8") as fh:
+            json.dump(dati, fh, indent=2, ensure_ascii=False)
+        percorsi.append(percorso)
+        log(f"Salvato {percorso}")
+
+    sint = sintesi(auth, b_dal, b_al, piva)
+    _salva("dump_corr_sintesi.json", sint)
+    for codice, tipo in TIPI.items():
+        if int(_importo(_campo(sint, tipo.campo_sintesi, default=0))) <= 0:
+            continue
+        url = (f"{BASE}{tipo.percorso_elenco.format(dal=b_dal, al=b_al, piva=piva)}"
+               f"?v={unix_time()}")
+        try:
+            dati = _get_json(auth, url, f"l'elenco «{tipo.etichetta}»")
+        except DownloadError as exc:
+            log(f"   ⚠️  {exc}")
+            continue
+        _salva(f"dump_corr_elenco_{codice}.json", dati)
+        voci = [v for v in (dati.get(tipo.chiave_elenco) or []) if isinstance(v, dict)]
+        if voci:
+            det = dettaglio(auth, codice, voci[0], piva)
+            if det is not None:
+                _salva(f"dump_corr_dettaglio_{codice}.json", det)
+    return percorsi

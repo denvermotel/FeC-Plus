@@ -17,8 +17,6 @@ Funzioni pubbliche:
                          control=None, log=print) -> str   # percorso xlsx
     elenco_fatture_csv_ade(auth, cf_cliente, piva, tipo, dal, al,
                            ...come sopra) -> str                  # percorso csv
-    elenco_corrispettivi_excel(auth, cf_cliente, piva, dal, al,
-                               ...come sopra) -> list[str] # un xlsx per matricola
 
 `tipo` (vedi TIPI_ELENCO): "emesse" | "ricevute_ricezione" | "ricevute_emissione"
 | "trans_emesse" | "trans_ricevute". Date `dal`/`al` in formato GGMMAAAA; i
@@ -26,8 +24,7 @@ periodi > 3 mesi vengono spezzati internamente (fec_queue.spezza_periodo, con la
 guardia dei 12 mesi) e le liste concatenate: l'output è comunque UN solo file.
 
 Dipendenza opzionale `openpyxl` (ruolo "excel" in fec_deps), import lazy solo
-alla scrittura del file. Per i corrispettivi la P.IVA è obbligatoria (fa parte
-degli URL AdE); vedi la sezione Corrispettivi più sotto per gli endpoint.
+alla scrittura del file. L'export dei corrispettivi sta in `fec_corrispettivi.py`.
 
 Per i nomi campo JSON delle fatture (fatture emesse, ma il concetto vale anche
 per gli altri tipi): la LISTA (`denominazione/piva/cf<Cliente|Fornitore>`) è la
@@ -429,13 +426,16 @@ def _ordina_chiavi_pivot(chiavi) -> list[str]:
 
 def _scrivi_xlsx(percorso: str, colonne_fisse: list[str], chiavi_pivot: list[str],
                  colonne_num: list[str], colonne_testo: list[str],
-                 righe: list[dict], titolo: str = "Elenco") -> None:
+                 righe: list[dict], titolo: str = "Elenco",
+                 escludi_da_totali=()) -> None:
     """
     Scrive un elenco pivot in `percorso`: colonne fisse (testo), coppie
     `Imp. X | IVA X` per ogni chiave pivot, colonne numeriche di coda (sommate
     nella riga TOTALI verde) e colonne di testo finali (escluse dai totali).
     Ogni riga è un dict con le chiavi delle colonne + `iva` = {chiave: (imp, iva)}.
     Intestazioni in grassetto, formato numerico contabile, prima riga bloccata.
+    `escludi_da_totali`: colonne numeriche che la riga TOTALI lascia vuote (per
+    esempio i contatori progressivi, che sommati non hanno senso).
     """
     try:
         from openpyxl import Workbook
@@ -463,6 +463,8 @@ def _scrivi_xlsx(percorso: str, colonne_fisse: list[str], chiavi_pivot: list[str
     ultima_num = len(intestazioni) - len(colonne_testo)      # colonne di testo finali escluse
 
     totali = [0.0] * (ultima_num - prima_num + 1)
+    escluse = {i for i, nome in enumerate(intestazioni[prima_num - 1:ultima_num])
+               if nome in escludi_da_totali}
     for riga in righe:
         valori = [riga.get(c, "") for c in colonne_fisse]
         for chiave in chiavi_pivot:
@@ -472,10 +474,11 @@ def _scrivi_xlsx(percorso: str, colonne_fisse: list[str], chiavi_pivot: list[str
         valori += [riga.get(c, "") for c in colonne_testo]
         ws.append(valori)
         for i, v in enumerate(valori[prima_num - 1:ultima_num]):
-            if isinstance(v, (int, float)):
+            if i not in escluse and isinstance(v, (int, float)):
                 totali[i] += v
 
-    riga_tot = ["TOTALI"] + [""] * (prima_num - 2) + totali + [""] * len(colonne_testo)
+    valori_tot = ["" if i in escluse else t for i, t in enumerate(totali)]
+    riga_tot = ["TOTALI"] + [""] * (prima_num - 2) + valori_tot + [""] * len(colonne_testo)
     ws.append(riga_tot)
     verde = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
     for cella in ws[ws.max_row]:
@@ -585,227 +588,6 @@ def elenco_fatture_csv_ade(auth: AuthResult, cf_cliente: str, piva: str, tipo: s
     log(f"\nCSV generato ({len(voci)} righe).")
     log(f"File: {percorso}")
     return percorso
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Corrispettivi - endpoint:
-#   sintesi:   rs/corrispettivi/sintesi/dal/{dal}/al/{al}/piva/{piva}
-#   elenco:    rs/corrispettivi/sintesi/elenco/dal/{dal}/al/{al}/piva/{piva}
-#                  /tipoCorrispettivo/{RT|MC|DA}    -> {"corrispettivi": [...]}
-#   dettaglio: rs/corrispettivi/dettaglio/{tipo}{idInvio}
-#                  -> {"datiContabiliRT_MC": [righe IVA], ...totali}
-# Date GGMMAAAA; la P.IVA è OBBLIGATORIA (fa parte dell'URL).
-# ─────────────────────────────────────────────────────────────────────────────
-
-# tipoCorrispettivo → campo conteggio della sintesi. Solo RT è confermato dalla
-# cattura; MC/DA sono dedotti dai partial HTML della SPA (elencoinvii-rt-mc /
-# colonnine / carb) e comunque interrogati solo se la sintesi ne conta invii.
-TIPI_CORRISPETTIVO = {
-    "RT": "registratoriInvii",      # registratori telematici (confermato)
-    "MC": "multicassaInvii",        # multicassa (dedotto)
-    "DA": "distributoriInvii",      # distributori automatici (dedotto)
-}
-
-# Colonne fisse dell'Excel corrispettivi (formato dallo userscript FE-Utility).
-COLONNE_FISSE_CORR = ["ID Invio", "Data", "Tipo dispositivo"]
-
-
-def _sintesi_corrispettivi(auth: AuthResult, dal: str, al: str, piva: str) -> dict:
-    """Sintesi del periodo: conteggio invii per tipo dispositivo (dict JSON)."""
-    url = (f"{IVASERVIZI}/cons/cons-services/rs/corrispettivi/sintesi"
-           f"/dal/{dal}/al/{al}/piva/{piva}?v={unix_time()}")
-    try:
-        r = auth.session.get(url, headers=auth.headers, verify=False, timeout=HTTP_TIMEOUT)
-    except requests.exceptions.RequestException as exc:
-        raise DownloadError(f"Nessuna risposta dall'AdE per la sintesi corrispettivi: {exc}.")
-    if r.status_code != 200:
-        raise DownloadError(
-            f"La sintesi corrispettivi è fallita (HTTP {r.status_code}). "
-            "La sessione potrebbe essere scaduta o la P.IVA non appartenere all'utenza.")
-    try:
-        return r.json()
-    except ValueError:
-        raise DownloadError("Risposta sintesi corrispettivi non in formato JSON.")
-
-
-def _lista_corrispettivi(auth: AuthResult, dal: str, al: str, piva: str,
-                         tipo_corr: str) -> list[dict]:
-    """Elenco invii del periodo per un tipoCorrispettivo (voci JSON grezze)."""
-    url = (f"{IVASERVIZI}/cons/cons-services/rs/corrispettivi/sintesi/elenco"
-           f"/dal/{dal}/al/{al}/piva/{piva}/tipoCorrispettivo/{tipo_corr}"
-           f"?v={unix_time()}")
-    try:
-        r = auth.session.get(url, headers=auth.headers, verify=False, timeout=HTTP_TIMEOUT)
-    except requests.exceptions.RequestException as exc:
-        raise DownloadError(f"Nessuna risposta dall'AdE per l'elenco corrispettivi: {exc}.")
-    if r.status_code != 200:
-        raise DownloadError(f"L'elenco corrispettivi {tipo_corr} è fallito "
-                            f"(HTTP {r.status_code}).")
-    try:
-        data = r.json()
-    except ValueError:
-        raise DownloadError("Risposta elenco corrispettivi non in formato JSON.")
-    return data.get("corrispettivi") or []
-
-
-def _dettaglio_corrispettivo(auth: AuthResult, tipo_corr: str,
-                             id_invio: str) -> dict | None:
-    """Dettaglio JSON di un invio (righe IVA). None su errore (riga coi soli totali)."""
-    url = (f"{IVASERVIZI}/cons/cons-services/rs/corrispettivi/dettaglio"
-           f"/{tipo_corr}{id_invio}?v={unix_time()}")
-    try:
-        r = auth.session.get(url, headers=auth.headers, verify=False, timeout=HTTP_TIMEOUT)
-    except requests.exceptions.RequestException:
-        return None
-    if r.status_code != 200:
-        return None
-    try:
-        return r.json()
-    except ValueError:
-        return None
-
-
-def _chiave_aliquota_corr(riga_iva: dict) -> str:
-    """
-    Chiave pivot di una riga contabile corrispettivi (dallo userscript FE-Utility):
-    ventilazione → «Ventilazione IVA»; aliquota numerica → «X%»; natura → codice;
-    altrimenti «Esente/N.I.».
-    """
-    if str(_campo(riga_iva, "ventilazione", default="") or "").strip():
-        return "Ventilazione IVA"
-    aliquota = _campo(riga_iva, "aliquota", "aliquotaIVA", "aliquotaIva")
-    if aliquota is not None and _importo(aliquota) > 0:
-        return f"{_importo(aliquota):g}%".replace(".", ",")
-    natura = str(_campo(riga_iva, "natura", "codiceNatura", default="") or "").strip()
-    if natura:
-        return natura.upper()
-    return "Esente/N.I."
-
-
-def _estrai_riga_corr(voce: dict, dettaglio: dict | None) -> dict:
-    """
-    Riga Excel per un invio corrispettivi: dati dell'elenco + righe contabili del
-    dettaglio (`datiContabiliRT_MC`). Senza dettaglio usa i totali dell'elenco.
-    """
-    riga = {
-        "ID Invio": str(_campo(voce, "idInvio", default="") or ""),
-        "Data": _data_it(_campo(voce, "timeRilevazione", "dataAccoglienzaFile")),
-        "Tipo dispositivo": str(_campo(voce, "tipoDispositivo", default="") or ""),
-        "_matricola": str(_campo(voce, "matricolaDispositivo", default="") or ""),
-        "_ordinamento": str(_campo(voce, "timeRilevazione", default="") or ""),
-    }
-
-    righe_iva = _righe_riepilogo_iva(dettaglio) if dettaglio else []
-    iva: dict[str, list[float]] = {}
-    tot_imp = tot_iva = 0.0
-    for riga_iva in righe_iva:
-        chiave = _chiave_aliquota_corr(riga_iva)
-        imponibile = _importo(_campo(riga_iva, "imponibile", "imponibileImporto"))
-        imposta = _importo(_campo(riga_iva, "imposta", "impostaImporto"))
-        coppia = iva.setdefault(chiave, [0.0, 0.0])
-        coppia[0] += imponibile
-        coppia[1] += imposta
-        tot_imp += imponibile
-        tot_iva += imposta
-    if not righe_iva:                       # fallback sui totali dell'elenco
-        tot_imp = _importo(_campo(voce, "ammontareTotale", "importoParzialeTotale"))
-        tot_iva = _importo(_campo(voce, "impostaTotale"))
-
-    fonte_memo = dettaglio if righe_iva else voce
-    riga["iva"] = iva
-    riga["Tot. Imponibile"] = tot_imp
-    riga["Tot. IVA"] = tot_iva
-    riga["Resi"] = _importo(_campo(fonte_memo, "resi"))
-    riga["Annulli"] = _importo(_campo(fonte_memo, "annullato", "annulli"))
-    riga["Totale Corrispettivi"] = tot_imp + tot_iva
-    return riga
-
-
-def elenco_corrispettivi_excel(auth: AuthResult, cf_cliente: str, piva: str,
-                               dal: str, al: str, *, dest_dir: str | None = None,
-                               sottocartella: bool = True,
-                               control: "Controllo | None" = None,
-                               log=print) -> list[str]:
-    """
-    Genera gli Excel «Elenco corrispettivi» per il periodo [dal, al] (GGMMAAAA):
-    **un file per matricola dispositivo** (come lo userscript FE-Utility), una riga
-    per invio, pivot per aliquota/ventilazione/natura, Resi/Annulli a memo (esclusi
-    dal Totale Corrispettivi). La P.IVA è obbligatoria (fa parte degli URL AdE).
-    Ritorna l'elenco dei percorsi creati.
-    """
-    piva = (piva or "").strip()
-    if not piva:
-        raise DownloadError("Per i corrispettivi la P.IVA è obbligatoria (fa parte "
-                            "dell'indirizzo delle chiamate AdE) e non è stato possibile "
-                            "ricavarla dall'utenza di lavoro attiva: indicala a mano.")
-    blocchi = spezza_periodo(dal, al, "%d%m%Y")
-    log(f"Elenco corrispettivi per P.IVA {piva}  ({dal} -> {al})"
-        + (f"  [{len(blocchi)} blocchi]" if len(blocchi) > 1 else ""))
-
-    # Sintesi per capire quali tipi dispositivo hanno invii nel periodo.
-    voci: list[tuple[str, dict]] = []       # (tipo_corr, voce elenco)
-    for b_dal, b_al in blocchi:
-        if control:
-            control.check()
-        sintesi = _sintesi_corrispettivi(auth, b_dal, b_al, piva)
-        for tipo_corr, campo_conteggio in TIPI_CORRISPETTIVO.items():
-            n = int(_importo(_campo(sintesi, campo_conteggio, default=0)))
-            if n <= 0:
-                continue
-            log(f"  {b_dal} -> {b_al}: {n} invii {tipo_corr} "
-                f"({campo_conteggio}); scarico l'elenco...")
-            for voce in _lista_corrispettivi(auth, b_dal, b_al, piva, tipo_corr):
-                voci.append((tipo_corr, voce))
-        # Tipi presenti in sintesi ma non mappati (es. carburanti): segnalo e proseguo.
-        for campo in ("carburantiInvii", "documentiCommerciali", "registratoriCassa",
-                      "torretteEnergia"):
-            n = int(_importo(_campo(sintesi, campo, default=0)))
-            if n > 0:
-                log(f"   ⚠️  {n} invii «{campo}» non supportati dall'export "
-                    "(tipoCorrispettivo non ancora noto): esclusi.")
-
-    log(f"Trovati {len(voci)} invii nell'intervallo.")
-    if not voci:
-        raise NessunDato("Nessun corrispettivo trovato nell'intervallo richiesto: "
-                         "nessun file Excel generato.")
-
-    righe: list[dict] = []
-    for i, (tipo_corr, voce) in enumerate(voci, start=1):
-        if control:
-            control.check()
-        id_invio = str(_campo(voce, "idInvio", default="") or "")
-        dettaglio = None
-        if _campo(voce, "dettaglio", default=False):
-            dettaglio = _dettaglio_corrispettivo(auth, tipo_corr, id_invio)
-            if dettaglio is None:
-                log(f"   ⚠️  Dettaglio {tipo_corr}{id_invio} non ottenuto: riga "
-                    "coi soli totali di elenco.")
-        righe.append(_estrai_riga_corr(voce, dettaglio))
-        if i % 10 == 0 or i == len(voci):
-            log(f"  Dettaglio invii: {i}/{len(voci)}")
-
-    # Un file per matricola dispositivo.
-    per_matricola: dict[str, list[dict]] = {}
-    for riga in righe:
-        per_matricola.setdefault(riga["_matricola"] or "senza_matricola",
-                                 []).append(riga)
-
-    cartella = _cartella(dest_dir, "ElencoCorrispettivi", cf_cliente, sottocartella)
-    percorsi: list[str] = []
-    for matricola, righe_m in sorted(per_matricola.items()):
-        righe_m.sort(key=lambda r: r["_ordinamento"])
-        chiavi_pivot = _ordina_chiavi_pivot({k for r in righe_m for k in r["iva"]})
-        percorso = os.path.join(cartella,
-                                f"{piva}_{dal}-{al}_corrispettivi_{matricola}.xlsx")
-        _scrivi_xlsx(percorso, COLONNE_FISSE_CORR, chiavi_pivot,
-                     ["Tot. Imponibile", "Tot. IVA", "Resi", "Annulli",
-                      "Totale Corrispettivi"],
-                     [], righe_m, titolo="Elenco corrispettivi")
-        log(f"File ({len(righe_m)} invii, matricola {matricola}): {percorso}")
-        percorsi.append(percorso)
-
-    log(f"\nGenerati {len(percorsi)} file (uno per matricola dispositivo).")
-    return percorsi
 
 
 # ─────────────────────────────────────────────────────────────────────────────
