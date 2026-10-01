@@ -350,6 +350,9 @@ class FecGui:
         self.estrai_zip_risultati_massivi = tk.BooleanVar(value=False)
         # Popup di conferma a fine operazione (con «Apri cartella»); disattivabile.
         self.popup_fine_task = tk.BooleanVar(value=True)
+        # Distributori automatici nell'export corrispettivi: venduto per differenza
+        # fra letture (i valori trasmessi sono progressivi) o dati grezzi.
+        self.util_da_modalita = tk.StringVar(value="differenza")
 
         # Cartelle per tipo di documento (popolate da _load_config): per ogni classe
         # path (override), «personalizza» e «senza sottocartella». Vuoto ⇒ usa std_destdir.
@@ -433,6 +436,9 @@ class FecGui:
         self.std_includi_disposizione.set(bool(cfg.get("std_includi_disposizione", False)))
         self.estrai_zip_risultati_massivi.set(bool(cfg.get("estrai_zip_risultati_massivi", False)))
         self.popup_fine_task.set(bool(cfg.get("popup_fine_task", True)))
+        modalita_da = cfg.get("corr_da_modalita", "differenza")
+        self.util_da_modalita.set(modalita_da if modalita_da in ("differenza", "grezzi")
+                                  else "differenza")
         # Posizione del divisore console/tab (px dal bordo alto del PanedWindow), o None.
         val = cfg.get("console_sash", None)
         self.console_sash = int(val) if isinstance(val, (int, float)) and val > 0 else None
@@ -487,6 +493,7 @@ class FecGui:
             "cartelle_espanse": bool(self.cartelle_espanse_var.get()),
             "estrai_zip_risultati_massivi": bool(self.estrai_zip_risultati_massivi.get()),
             "popup_fine_task": bool(self.popup_fine_task.get()),
+            "corr_da_modalita": self.util_da_modalita.get(),
             "etichette_deleghe": {
                 "campo1": self.etichetta1_var.get().strip()
                           or ETICHETTE_DELEGHE_DEFAULT["campo1"],
@@ -1335,6 +1342,17 @@ class FecGui:
             fec_store.save_settings(cfg)
         except Exception:
             pass
+
+    def _salva_preferenza(self, chiave: str, valore) -> None:
+        """Salva una sola preferenza, senza passare da _save_config che rilegge
+        tutta la finestra Impostazioni."""
+        try:
+            import fec_store
+            cfg = fec_store.load_settings()
+            cfg[chiave] = valore
+            fec_store.save_settings(cfg)
+        except Exception as exc:  # noqa: BLE001 - una preferenza persa non blocca la GUI
+            self._log(f"⚠️  Preferenza non salvata ({chiave}): {exc}")
 
     def _imposta_console(self, aperta: bool):
         """Mostra o nasconde la console. Il riquadro inferiore resta nel
@@ -4558,6 +4576,21 @@ class FecGui:
         ttk.Radiobutton(fframe, text="CSV Agenzia Entrate",
                         variable=self.util_formato, value="csv").pack(side=tk.LEFT, padx=14)
 
+        r += 1
+        self._util_da_lbl = ttk.Label(f, text="Distributori automatici:")
+        self._util_da_lbl.grid(row=r, column=0, sticky="w", pady=4, padx=(0, 8))
+        self._util_da_frame = ttk.Frame(f)
+        self._util_da_frame.grid(row=r, column=1, sticky="w")
+        ttk.Radiobutton(self._util_da_frame, text="Venduto per differenza fra letture",
+                        variable=self.util_da_modalita,
+                        value="differenza").pack(side=tk.LEFT)
+        ttk.Radiobutton(self._util_da_frame, text="Dati grezzi del dettaglio",
+                        variable=self.util_da_modalita,
+                        value="grezzi").pack(side=tk.LEFT, padx=14)
+        self.util_da_modalita.trace_add(
+            "write", lambda *_: self._salva_preferenza("corr_da_modalita",
+                                                       self.util_da_modalita.get()))
+
         r += 1; self._row(f, r, "CF Cliente:", self.util_cfcl)
         r += 1
         self._util_piva_lbl = ttk.Label(f, text="P.IVA (opzionale):")
@@ -4596,6 +4629,12 @@ class FecGui:
             corr = self.util_tipo.get() == "Corrispettivi"
             self._util_piva_lbl.configure(
                 text="P.IVA (se vuota, quella attiva):" if corr else "P.IVA (opzionale):")
+            if corr:
+                self._util_da_lbl.grid()
+                self._util_da_frame.grid()
+            else:
+                self._util_da_lbl.grid_remove()
+                self._util_da_frame.grid_remove()
 
         self.util_tipo.trace_add("write", _toggle_piva_label)
         _toggle_piva_label()
@@ -4604,8 +4643,17 @@ class FecGui:
                                  "aliquota IVA/natura (richiede il pacchetto opzionale "
                                  "«openpyxl»). Fatture: una riga per fattura, con una chiamata di "
                                  "dettaglio per ciascuna (su periodi ampi può richiedere qualche "
-                                 "minuto). Corrispettivi: un file per matricola dispositivo; se la "
-                                 "P.IVA non è indicata usa quella dell'utenza di lavoro attiva. "
+                                 "minuto). "
+                                 "Corrispettivi: un file per canale e dispositivo "
+                                 "(registratori, multicassa, distributori automatici e "
+                                 "di carburante, colonnine) e uno unico per i documenti "
+                                 "commerciali online e i registratori di cassa; se la "
+                                 "P.IVA non è indicata usa quella dell'utenza di lavoro "
+                                 "attiva. Per i distributori automatici i valori trasmessi "
+                                 "sono progressivi: di default si calcola il venduto per "
+                                 "differenza fra letture, in alternativa si esportano i "
+                                 "dati grezzi. Un elenco troncato dal portale viene "
+                                 "richiesto di nuovo a periodi più brevi. "
                                  "Con «Anno intero» si può scegliere se avere un file unico oppure "
                                  "uno per trimestre o per mese. "
                                  "Il formato «CSV Agenzia Entrate» produce lo stesso file del "
@@ -4638,7 +4686,7 @@ class FecGui:
             r += 1
             bar = ttk.Frame(f)
             bar.grid(row=r, column=0, columnspan=2, sticky="w")
-            ttk.Button(bar, text="🔍 Dump JSON fatture", width=22,
+            ttk.Button(bar, text="🔍 Dump JSON", width=22,
                       command=self._run_utility_dump).pack(side=tk.LEFT)
             ttk.Button(bar, text="🎥 Cattura HAR fatture/corrisp.", width=28,
                       command=self._run_utility_har).pack(side=tk.LEFT, padx=8)
@@ -4690,6 +4738,7 @@ class FecGui:
                 return
 
         gran = self._util_gran()
+        modalita_da = self.util_da_modalita.get()
 
         def op(res, log, fq, ctrl, prog):
             import fec_utility
@@ -4699,12 +4748,17 @@ class FecGui:
                 if piva_eff:
                     log(f"P.IVA non indicata: uso quella dell'utenza attiva ({piva_eff}).")
             percorsi = []
+            avvisi = []
             for sd, sa in self._util_sotto_periodi(dal, al, gran, log):
                 try:
                     if corrispettivi:
-                        percorsi.extend(fec_utility.elenco_corrispettivi_excel(
+                        import fec_corrispettivi
+                        esito_corr = fec_corrispettivi.elenco_corrispettivi_excel(
                             res, cfcl, piva_eff, sd, sa,
-                            dest_dir=destdir, sottocartella=sotto, control=ctrl, log=log))
+                            dest_dir=destdir, sottocartella=sotto, control=ctrl, log=log,
+                            modalita_da=modalita_da)
+                        percorsi.extend(esito_corr.percorsi)
+                        avvisi.extend(esito_corr.avvisi)
                     else:
                         tipo = self._UTILITY_TIPI.get(tipo_ui, "emesse")
                         genera = (fec_utility.elenco_fatture_csv_ade if formato_csv
@@ -4714,6 +4768,12 @@ class FecGui:
                             dest_dir=destdir, sottocartella=sotto, control=ctrl, log=log))
                 except fec_utility.NessunDato as exc:
                     log(f"   (periodo saltato: {exc})")
+            if avvisi:
+                testo = "\n".join(avvisi[:15]) + ("\n..." if len(avvisi) > 15 else "")
+                self.root.after(0, messagebox.showwarning,
+                                "Corrispettivi: elenchi incompleti",
+                                "Il portale ha restituito elenchi incompleti anche "
+                                f"frazionando il periodo:\n\n{testo}")
             return percorsi
 
         self._esegui_in_process(cfcl, piva, _profilo_da_modalita(self.modalita.get()),
@@ -4753,9 +4813,15 @@ class FecGui:
         materiale = self._materiale_dir_path()
 
         def op(res, log, fq, ctrl, prog):
-            import fec_utility
-            fec_utility.dump_json_esempio(res, tipo, dal, al,
-                                          dest_dir=materiale, log=log)
+            if tipo == "corrispettivi":
+                import fec_corrispettivi
+                piva_eff = piva or (getattr(res, "piva", "") or "").strip()
+                fec_corrispettivi.dump_json(res, piva_eff, dal, al,
+                                            dest_dir=materiale, log=log)
+            else:
+                import fec_utility
+                fec_utility.dump_json_esempio(res, tipo, dal, al,
+                                              dest_dir=materiale, log=log)
             log(f"⚠️  I dump contengono dati reali: restano in «{materiale}» (fuori da Git).")
 
         self._esegui_in_process(cfcl, piva, _profilo_da_modalita(self.modalita.get()),
