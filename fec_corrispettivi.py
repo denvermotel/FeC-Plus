@@ -243,3 +243,110 @@ def nome_file(piva: str, dal: str, al: str, codice: str, gruppo: str) -> str:
     if tipo.campo_gruppo:
         nome += "_" + (re.sub(r"[^A-Za-z0-9_-]+", "_", gruppo) or "senza_matricola")
     return nome + ".xlsx"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Distributori automatici: ogni invio riporta il totale venduto dall'attivazione
+# della macchina (modalità CUMULATO), non il venduto dell'intervallo. Sommare gli
+# invii come per i registratori moltiplicherebbe il fatturato.
+# ─────────────────────────────────────────────────────────────────────────────
+
+COLONNE_FISSE_DA = ["ID Invio", "Data", "Matricola", "Modalità"]
+COLONNE_NUM_DA_DIFF = ["Lettura precedente", "Totale venduto (contatore)",
+                       "Venduto dell'intervallo"]
+NON_SOMMARE_DA = ("Lettura precedente", "Totale venduto (contatore)")
+CAMPI_DA_GREZZI = [
+    ("Venduto", "venduto"), ("Venduto contante", "vendutoContante"),
+    ("Venduto non contante", "vendutoNoContante"),
+    ("Totale incassato", "incassatoNoContante"),
+    ("Incassato ricarica", "incassatoRicarica"), ("Incassato vendita", "incassatoVendita"),
+    ("Totale reso tubi resto", "totaleResoTubiResto"),
+    ("Totale versato tubi resto", "totaleVersoTubiResto"),
+    ("Reso manuale tubi resto", "resoManualTubiResto"),
+    ("Caricato manuale tubi resto", "caricatoManualTubiResto"),
+]
+
+
+def _dati_da(dettaglio) -> dict:
+    dati = _campo(dettaglio, "datiContabiliDA") if isinstance(dettaglio, dict) else None
+    return dati if isinstance(dati, dict) else {}
+
+
+def _matricola(voce: dict) -> str:
+    return _s(voce, "matricolaDispositivo") or "senza_matricola"
+
+
+def venduto_da(voce: dict, dettaglio: dict | None) -> float:
+    """Contatore del venduto: dal dettaglio se c'è, altrimenti `importo` dell'elenco."""
+    venduto = _campo(_dati_da(dettaglio), "venduto")
+    return _importo(venduto if venduto is not None else _campo(voce, "importo"))
+
+
+def letture_precedenti(voci: list[dict], inizio: datetime) -> dict[str, float]:
+    """Per ogni matricola, il contatore dell'ultimo invio anteriore a `inizio`."""
+    ultime: dict[str, tuple[datetime, float]] = {}
+    for voce in voci:
+        quando = ordine(voce)
+        if quando >= inizio:
+            continue
+        m = _matricola(voce)
+        if m not in ultime or quando > ultime[m][0]:
+            ultime[m] = (quando, _importo(_campo(voce, "importo")))
+    return {m: valore for m, (_, valore) in ultime.items()}
+
+
+def _base_da(voce: dict) -> dict:
+    return {"ID Invio": _s(voce, "idInvio"), "Data": _data_voce(voce),
+            "Matricola": _matricola(voce), "Modalità": _s(voce, "modalitaRilevazione"),
+            "_gruppo": _matricola(voce), "_ordinamento": ordine(voce), "iva": {}}
+
+
+def righe_da_differenza(invii: list[tuple[dict, dict | None]],
+                        precedenti: dict[str, float]) -> list[dict]:
+    """Una riga per invio con lettura precedente, contatore e venduto per differenza."""
+    per_matricola: dict[str, list[tuple[dict, dict | None]]] = {}
+    for voce, det in invii:
+        per_matricola.setdefault(_matricola(voce), []).append((voce, det))
+    righe: list[dict] = []
+    for m, lista in per_matricola.items():
+        lista.sort(key=lambda vd: ordine(vd[0]))
+        prec = precedenti.get(m)
+        for voce, det in lista:
+            contatore = venduto_da(voce, det)
+            modalita = _s(voce, "modalitaRilevazione") or _s(det or {}, "modalitaRilevazione")
+            riga = _base_da(voce)
+            riga["Totale venduto (contatore)"] = contatore
+            riga["Note"] = ""
+            if modalita.upper() != "CUMULATO":
+                riga["Lettura precedente"] = None
+                riga["Venduto dell'intervallo"] = contatore
+                riga["Note"] = (f"Modalità di rilevazione «{modalita or 'non indicata'}»: "
+                                "importo riportato così com'è.")
+            elif prec is None:
+                riga["Lettura precedente"] = None
+                riga["Venduto dell'intervallo"] = None
+                riga["Note"] = ("Lettura precedente non trovata: venduto dell'intervallo "
+                                "non calcolabile.")
+            else:
+                riga["Lettura precedente"] = prec
+                riga["Venduto dell'intervallo"] = round(contatore - prec, 2)
+                if contatore < prec:
+                    riga["Note"] = ("Contatore inferiore alla lettura precedente "
+                                    "(azzeramento o sostituzione della scheda?): verificare.")
+            prec = contatore
+            righe.append(riga)
+    return righe
+
+
+def righe_da_grezzi(invii: list[tuple[dict, dict | None]]) -> list[dict]:
+    """Una riga per invio con i campi del dettaglio, senza differenze."""
+    righe: list[dict] = []
+    for voce, det in invii:
+        dati = _dati_da(det)
+        riga = _base_da(voce)
+        for intestazione, campo in CAMPI_DA_GREZZI:
+            riga[intestazione] = _importo(_campo(dati, campo))
+        if not dati:
+            riga["Venduto"] = _importo(_campo(voce, "importo"))
+        righe.append(riga)
+    return righe
