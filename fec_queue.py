@@ -49,7 +49,8 @@ def _descr_fmt(fmt: str) -> str:
 
 def spezza_periodo(dal: str, al: str, fmt: str = "%d%m%Y",
                    max_mesi: int = MAX_MESI_BLOCCO,
-                   max_totale_mesi: int = MAX_MESI_TOTALE) -> list[tuple[str, str]]:
+                   max_totale_mesi: int = MAX_MESI_TOTALE,
+                   max_giorni: int | None = None) -> list[tuple[str, str]]:
     """
     Spezza l'intervallo [dal, al] in blocchi da al massimo `max_mesi` mesi.
 
@@ -57,6 +58,9 @@ def spezza_periodo(dal: str, al: str, fmt: str = "%d%m%Y",
     `%Y-%m-%d` per massive/corrispettivi). I blocchi partono da `dal` e coprono
     finestre di `max_mesi` mesi calendariali; l'ultimo è tagliato a `al`.
     Un intervallo già <= max_mesi torna come SINGOLO blocco (comportamento storico).
+
+    Con `max_giorni` i blocchi durano `max_giorni` giorni e `max_mesi` non conta:
+    serve a richiedere di nuovo, a pezzi più piccoli, un elenco che l'AdE ha troncato.
 
     Blocco di sicurezza: se l'intervallo totale supera `max_totale_mesi` mesi,
     solleva DownloadError (evita di sovraccaricare il programma e i server AdE).
@@ -83,7 +87,10 @@ def spezza_periodo(dal: str, al: str, fmt: str = "%d%m%Y",
     blocchi: list[tuple[str, str]] = []
     start = d0
     while start <= a0:
-        end = min(start + relativedelta(months=max_mesi) - timedelta(days=1), a0)
+        if max_giorni:
+            end = min(start + timedelta(days=max_giorni - 1), a0)
+        else:
+            end = min(start + relativedelta(months=max_mesi) - timedelta(days=1), a0)
         blocchi.append((start.strftime(fmt), end.strftime(fmt)))
         start = end + timedelta(days=1)
     return blocchi
