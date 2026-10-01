@@ -1,0 +1,245 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# FeC-Plus - v0.04 dev
+"""
+fec_corrispettivi.py - Export Excel dei corrispettivi telematici.
+
+Libreria pura sopra le API di consultazione `rs/corrispettivi/...`: riceve un
+`AuthResult` già autenticato e scrive un file .xlsx per dispositivo, o uno unico
+per i canali senza dispositivo. La P.IVA è obbligatoria: fa parte degli URL.
+
+Tipi gestiti in `TIPI`. Solo i registratori telematici sono confermati su JSON
+reale: per gli altri i nomi dei campi vengono dal frontend del portale, quindi
+si leggono sempre con alias (`_campo`) e gli importi passano da `_importo`, che
+accetta numeri e stringhe in entrambi i formati.
+"""
+
+from __future__ import annotations
+
+__version__ = "0.04 dev"
+
+import re
+from dataclasses import dataclass
+from datetime import datetime
+
+from ade_auth import IVASERVIZI, unix_time
+from fec_utility import _campo, _data_it, _importo, _righe_riepilogo_iva
+
+BASE = f"{IVASERVIZI}/cons/cons-services/rs/corrispettivi"
+
+
+@dataclass(frozen=True)
+class TipoCorr:
+    codice: str
+    etichetta: str
+    campo_sintesi: str       # conteggio degli invii nella sintesi
+    percorso_elenco: str     # dopo BASE, con {dal} {al} {piva}
+    chiave_elenco: str       # array delle voci nella risposta di elenco
+    campo_totale: str        # totale reale, per riconoscere un elenco troncato
+    campo_gruppo: str        # campo della voce che separa i file; "" = file unico
+    suffisso_file: str
+
+
+_ELENCO_SINTESI = "/sintesi/elenco/dal/{dal}/al/{al}/piva/{piva}/tipoCorrispettivo/"
+
+TIPI: dict[str, TipoCorr] = {
+    "RT": TipoCorr("RT", "Registratori telematici", "registratoriInvii",
+                   _ELENCO_SINTESI + "RT", "corrispettivi", "totaleCorrispettivi",
+                   "matricolaDispositivo", "corrispettivi"),
+    "MC": TipoCorr("MC", "Multicassa", "multicassaInvii",
+                   _ELENCO_SINTESI + "MC", "corrispettivi", "totaleCorrispettivi",
+                   "matricolaDispositivo", "multicassa"),
+    "DA": TipoCorr("DA", "Distributori automatici", "distributoriInvii",
+                   _ELENCO_SINTESI + "DA", "corrispettivi", "totaleCorrispettivi",
+                   "matricolaDispositivo", "distributori"),
+    "CA": TipoCorr("CA", "Distributori di carburante", "carburantiInvii",
+                   _ELENCO_SINTESI + "CA", "corrispettivi", "totaleCorrispettivi",
+                   "codiceDitta", "carburanti"),
+    "DC": TipoCorr("DC", "Documenti commerciali online", "documentiCommerciali",
+                   "/dc/ricerca/dal/{dal}/al/{al}/piva/{piva}", "elenco", "totaleElementi",
+                   "", "documenti_commerciali"),
+    "RC": TipoCorr("RC", "Registratori di cassa", "registratoriCassa",
+                   "/rc/ricerca/dal/{dal}/al/{al}/piva/{piva}", "elenco", "totaleElementi",
+                   "", "registratori_cassa"),
+    "COL": TipoCorr("COL", "Colonnine di ricarica", "torretteEnergia",
+                    "/col/ricerca/dal/{dal}/al/{al}/piva/{piva}", "elenco", "totaleElementi",
+                    "matrServerEnergia", "colonnine"),
+}
+
+# Array delle righe contabili nel dettaglio, per i tipi con ripartizione IVA.
+_CHIAVE_RIGHE = {"RT": "datiContabiliRT_MC", "MC": "datiContabiliRT_MC",
+                 "DC": "listaAliquota", "RC": "lista", "COL": "datiContabili"}
+
+COLONNE_FISSE = ["ID Invio", "Data", "Tipo dispositivo"]
+COLONNE_NUM = ["Tot. Imponibile", "Tot. IVA", "Resi", "Annulli", "Totale Corrispettivi"]
+COLONNE_FISSE_CA = ["ID Invio", "Data", "Codice ditta", "Periodo dal", "Periodo al"]
+COLONNE_NUM_CA = ["Imp. benzina/gasolio", "IVA benzina/gasolio", "Imp. gas", "IVA gas",
+                  "Tot. Imponibile", "Tot. IVA", "Totale"]
+
+
+def _s(d, *nomi) -> str:
+    return str(_campo(d, *nomi, default="") or "").strip()
+
+
+_FORMATI_DATA = ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y",
+                 "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d")
+
+
+def data_ora(val) -> datetime | None:
+    """Data AdE eterogenea: `GG/MM/AAAA HH:MM` nei corrispettivi, ISO altrove."""
+    s = str(val or "").strip().rstrip("Z").split(".")[0]
+    for fmt in _FORMATI_DATA:
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def ordine(voce: dict) -> datetime:
+    """Chiave di ordinamento cronologico di una voce di elenco."""
+    return (data_ora(_campo(voce, "timeRilevazione", "dataEmissione", "dataFattura",
+                            "dataAccoglienzaFile")) or datetime.min)
+
+
+def chiave_aliquota(riga: dict) -> str:
+    """
+    Chiave pivot di una riga contabile: ventilazione, aliquota numerica («10%»),
+    codice natura, altrimenti «Esente/N.I.».
+    """
+    if _s(riga, "ventilazione"):
+        return "Ventilazione IVA"
+    aliquota = _campo(riga, "aliquota", "aliquotaIVA", "aliquotaIva")
+    if aliquota is not None and _importo(aliquota) > 0:
+        return f"{_importo(aliquota):g}%".replace(".", ",")
+    natura = _s(riga, "natura", "codiceNatura")
+    if natura:
+        return natura.upper()
+    return "Esente/N.I."
+
+
+def righe_contabili(codice: str, dettaglio: dict | None) -> list[dict]:
+    """Righe contabili del dettaglio: per nome se noto, altrimenti ricerca generica."""
+    if not isinstance(dettaglio, dict):
+        return []
+    righe = _campo(dettaglio, _CHIAVE_RIGHE.get(codice, "-"))
+    if not isinstance(righe, list):
+        righe = _righe_riepilogo_iva(dettaglio)
+    return [r for r in righe if isinstance(r, dict)]
+
+
+def url_dettaglio(codice: str, voce: dict, piva: str) -> str | None:
+    """URL del dettaglio di una voce, o None se mancano gli identificativi."""
+    if codice in ("RT", "MC", "DA"):
+        id_invio = _s(voce, "idInvio")
+        percorso = f"/dettaglio/{codice}{id_invio}" if id_invio else None
+    elif codice == "CA":
+        id_invio = _s(voce, "idInvio")
+        percorso = f"/dettagliocarburanti/CA{id_invio}" if id_invio else None
+    elif codice == "DC":
+        id_voce = _s(voce, "id")
+        percorso = f"/dc/dettaglio/{id_voce}" if id_voce else None
+    elif codice == "RC":
+        # il dettaglio delle comunicazioni RC si chiede per idUnivoco, non per idInvio
+        id_univoco = _s(voce, "idUnivoco")
+        percorso = f"/rc/dettaglio/{id_univoco}" if id_univoco else None
+    elif codice == "COL":
+        id_invio, riga = _s(voce, "idInvio"), _s(voce, "idRigaPresa")
+        p = _s(voce, "piva") or piva
+        percorso = (f"/col/dettaglio/piva/{p}/idInvio/{id_invio}/idRigaPresa/{riga}"
+                    if id_invio and riga else None)
+    else:
+        percorso = None
+    return f"{BASE}{percorso}?v={unix_time()}" if percorso else None
+
+
+def _data_voce(voce: dict) -> str:
+    return _data_it(_campo(voce, "timeRilevazione", "dataEmissione", "dataFattura",
+                           "dataAccoglienzaFile"))
+
+
+def estrai_riga_pivot(codice: str, voce: dict, dettaglio: dict | None) -> dict:
+    """
+    Riga Excel per i tipi con ripartizione IVA (RT, MC, DC, RC, COL): pivot per
+    aliquota/natura, resi e annulli a memo (fuori dal Totale Corrispettivi). Senza
+    dettaglio usa i totali dell'elenco.
+    """
+    tipo = TIPI[codice]
+    righe = righe_contabili(codice, dettaglio)
+    iva: dict[str, list[float]] = {}
+    tot_imp = tot_iva = resi_righe = annulli_righe = 0.0
+    for r in righe:
+        imponibile = _importo(_campo(r, "imponibile", "imponibileImporto"))
+        imposta = _importo(_campo(r, "imposta", "impostaImporto"))
+        coppia = iva.setdefault(chiave_aliquota(r), [0.0, 0.0])
+        coppia[0] += imponibile
+        coppia[1] += imposta
+        tot_imp += imponibile
+        tot_iva += imposta
+        resi_righe += _importo(_campo(r, "resi"))
+        annulli_righe += _importo(_campo(r, "annulli", "annullato"))
+    if not righe:
+        tot_imp = _importo(_campo(voce, "ammontareTotale", "importoParzialeTotale",
+                                  "imponibileGiornata", "totaleImponibile", "imponibile"))
+        tot_iva = _importo(_campo(voce, "impostaTotale", "totaleImposta", "imposta"))
+    fonte = dettaglio if righe else voce
+    resi = _importo(_campo(fonte, "resi", "importoReso")) or resi_righe
+    annulli = (_importo(_campo(fonte, "annullato", "annulli", "importoAnnullato"))
+               or annulli_righe)
+    return {
+        "ID Invio": _s(voce, "idInvio", "id", "idUnivoco"),
+        "Data": _data_voce(voce),
+        "Tipo dispositivo": _s(voce, "tipoDispositivo") or tipo.etichetta,
+        "_gruppo": _s(voce, tipo.campo_gruppo) if tipo.campo_gruppo else "",
+        "_ordinamento": ordine(voce),
+        "iva": iva,
+        "Tot. Imponibile": tot_imp,
+        "Tot. IVA": tot_iva,
+        "Resi": resi,
+        "Annulli": annulli,
+        "Totale Corrispettivi": tot_imp + tot_iva,
+    }
+
+
+def e_annullato_ca(voce: dict) -> bool:
+    """Invio carburanti annullato (`statoIdInvio` = 1): non va nei totali."""
+    return _s(voce, "statoIdInvio") == "1"
+
+
+def estrai_riga_ca(voce: dict, dettaglio: dict | None) -> dict:
+    """Riga Excel di un invio carburanti: benzina/gasolio e gas sommati sui giorni."""
+    righe = _campo(dettaglio, "datiContabili_AC") if isinstance(dettaglio, dict) else None
+    righe = [r for r in righe if isinstance(r, dict)] if isinstance(righe, list) else []
+    imp_b = sum(_importo(_campo(r, "imponibile")) for r in righe)
+    iva_b = sum(_importo(_campo(r, "imposta")) for r in righe)
+    imp_g = sum(_importo(_campo(r, "imponibileGas")) for r in righe)
+    iva_g = sum(_importo(_campo(r, "impostaGas")) for r in righe)
+    if not righe:
+        imp_b = _importo(_campo(voce, "importo"))
+        iva_b = _importo(_campo(voce, "imposta"))
+    return {
+        "ID Invio": _s(voce, "idInvio"),
+        "Data": _data_voce(voce),
+        "Codice ditta": _s(voce, "codiceDitta"),
+        "Periodo dal": _data_it(_campo(voce, "riferimentoDal")),
+        "Periodo al": _data_it(_campo(voce, "riferimentoAl")),
+        "_gruppo": _s(voce, "codiceDitta"),
+        "_ordinamento": ordine(voce),
+        "iva": {},
+        "Imp. benzina/gasolio": imp_b,
+        "IVA benzina/gasolio": iva_b,
+        "Imp. gas": imp_g,
+        "IVA gas": iva_g,
+        "Tot. Imponibile": imp_b + imp_g,
+        "Tot. IVA": iva_b + iva_g,
+        "Totale": imp_b + imp_g + iva_b + iva_g,
+    }
+
+
+def nome_file(piva: str, dal: str, al: str, codice: str, gruppo: str) -> str:
+    """Nome del file xlsx; per i tipi con dispositivo include l'identificativo."""
+    tipo = TIPI[codice]
+    nome = f"{piva}_{dal}-{al}_{tipo.suffisso_file}"
+    if tipo.campo_gruppo:
+        nome += "_" + (re.sub(r"[^A-Za-z0-9_-]+", "_", gruppo) or "senza_matricola")
+    return nome + ".xlsx"
