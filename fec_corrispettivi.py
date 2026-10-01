@@ -276,6 +276,31 @@ def _matricola(voce: dict) -> str:
     return _s(voce, "matricolaDispositivo") or "senza_matricola"
 
 
+def _modalita_da(voce: dict, dettaglio: dict | None = None) -> str:
+    """Modalità di rilevazione: voce > datiContabiliDA > dettaglio root > default CUMULATO."""
+    return (_s(voce, "modalitaRilevazione") or
+            _s(_campo(dettaglio, "datiContabiliDA"), "modalitaRilevazione") or
+            _s(dettaglio or {}, "modalitaRilevazione") or "CUMULATO")
+
+
+def _nota_divergenza(voce: dict, dettaglio: dict | None) -> str:
+    """Avviso divergenza tra venduto del dettaglio e importo dell'elenco."""
+    importo = _importo(_campo(voce, "importo"))
+    venduto_detail = _campo(_dati_da(dettaglio), "venduto")
+    if venduto_detail not in (None, ""):
+        venduto_detail_val = _importo(venduto_detail)
+        if abs(venduto_detail_val - importo) > 0.005:
+            return (f"Il venduto del dettaglio ({venduto_detail_val:.2f}) differisce dal totale "
+                    f"dell'elenco ({importo:.2f}): verificare.")
+    return ""
+
+
+def _unisci_note(nota1: str, nota2: str) -> str:
+    """Unisce due note con un singolo spazio, scartando stringhe vuote."""
+    parti = [n for n in [nota1, nota2] if n]
+    return " ".join(parti)
+
+
 def venduto_da(voce: dict, dettaglio: dict | None) -> float:
     """Contatore del venduto: `importo` dell'elenco; fallback al dettaglio `venduto` se assente."""
     importo = _campo(voce, "importo")
@@ -292,8 +317,7 @@ def letture_precedenti(voci: list[dict], inizio: datetime) -> dict[str, float]:
         quando = ordine(voce)
         if quando >= inizio:
             continue
-        modalita = _s(voce, "modalitaRilevazione") or "CUMULATO"
-        if modalita.upper() != "CUMULATO":
+        if _modalita_da(voce).upper() != "CUMULATO":
             continue
         m = _matricola(voce)
         if m not in ultime or quando > ultime[m][0]:
@@ -302,11 +326,8 @@ def letture_precedenti(voci: list[dict], inizio: datetime) -> dict[str, float]:
 
 
 def _base_da(voce: dict, dettaglio: dict | None = None) -> dict:
-    modalita = (_s(voce, "modalitaRilevazione") or
-                _s(_campo(dettaglio, "datiContabiliDA"), "modalitaRilevazione") or
-                _s(dettaglio or {}, "modalitaRilevazione"))
     return {"ID Invio": _s(voce, "idInvio"), "Data": _data_voce(voce),
-            "Matricola": _matricola(voce), "Modalità": modalita,
+            "Matricola": _matricola(voce), "Modalità": _modalita_da(voce, dettaglio),
             "_gruppo": _matricola(voce), "_ordinamento": ordine(voce), "iva": {}}
 
 
@@ -322,33 +343,27 @@ def righe_da_differenza(invii: list[tuple[dict, dict | None]],
         prec = precedenti.get(m)
         for voce, det in lista:
             contatore = venduto_da(voce, det)
-            modalita = _s(voce, "modalitaRilevazione") or _s(det or {}, "modalitaRilevazione")
+            modalita = _modalita_da(voce, det)
             riga = _base_da(voce, det)
             riga["Totale venduto (contatore)"] = contatore
             riga["Note"] = ""
             if modalita.upper() != "CUMULATO":
                 riga["Lettura precedente"] = None
                 riga["Venduto dell'intervallo"] = contatore
-                riga["Note"] = (f"Modalità di rilevazione «{modalita or 'non indicata'}»: "
+                riga["Note"] = (f"Modalità di rilevazione «{modalita}»: "
                                 "importo riportato così com'è.")
             elif prec is None:
                 riga["Lettura precedente"] = None
                 riga["Venduto dell'intervallo"] = None
                 riga["Note"] = ("Lettura precedente non trovata: venduto dell'intervallo "
                                 "non calcolabile.")
-                venduto_detail = _campo(_dati_da(det), "venduto")
-                if venduto_detail is not None and abs(_importo(venduto_detail) - contatore) > 0.005:
-                    riga["Note"] += f" Il venduto del dettaglio ({_importo(venduto_detail):.2f}) differisce dal totale dell'elenco ({contatore:.2f}): verificare."
             else:
                 riga["Lettura precedente"] = prec
                 riga["Venduto dell'intervallo"] = round(contatore - prec, 2)
                 if contatore < prec:
                     riga["Note"] = ("Contatore inferiore alla lettura precedente "
                                     "(azzeramento o sostituzione della scheda?): verificare.")
-                else:
-                    venduto_detail = _campo(_dati_da(det), "venduto")
-                    if venduto_detail is not None and abs(_importo(venduto_detail) - contatore) > 0.005:
-                        riga["Note"] = f"Il venduto del dettaglio ({_importo(venduto_detail):.2f}) differisce dal totale dell'elenco ({contatore:.2f}): verificare."
+            riga["Note"] = _unisci_note(riga["Note"], _nota_divergenza(voce, det))
             if modalita.upper() == "CUMULATO":
                 prec = contatore
             righe.append(riga)

@@ -102,6 +102,35 @@ class TestDifferenza(unittest.TestCase):
         righe = fc.righe_da_grezzi([(voce, dettaglio)])
         self.assertEqual(righe[0]["Modalità"], "CUMULATO")
 
+    def test_divergenza_in_puntuale(self):
+        righe = fc.righe_da_differenza(
+            [(_voce("10", "03/07/2026 10:00", "120,00", modalita="PUNTUALE"),
+              _dettaglio("150,00"))], {})
+        self.assertIn("PUNTUALE", righe[0]["Note"])
+        self.assertIn("differisce", righe[0]["Note"])
+
+    def test_divergenza_con_calo(self):
+        righe = fc.righe_da_differenza(
+            [(_voce("10", "03/07/2026 10:00", "100,00"), _dettaglio("150,00"))],
+            {"M1": 95116.94})
+        self.assertIn("inferiore", righe[0]["Note"])
+        self.assertIn("differisce", righe[0]["Note"])
+
+    def test_venduto_vuoto_no_divergenza(self):
+        righe = fc.righe_da_differenza(
+            [(_voce("10", "03/07/2026 10:00", "1100,00"),
+              {"datiContabiliDA": {"venduto": "", "vendutoContante": "1,00"}})],
+            {"M1": 1000.0})
+        self.assertNotIn("differisce", righe[0]["Note"])
+
+    def test_modalita_da_daticontabili_in_cumulato(self):
+        voce = {"idInvio": "10", "timeRilevazione": "03/07/2026 10:00",
+                "matricolaDispositivo": "M1", "importo": "1100,00"}
+        dettaglio = {"datiContabiliDA": {"venduto": "1100,00",
+                                        "modalitaRilevazione": "CUMULATO"}}
+        righe = fc.righe_da_differenza([(voce, dettaglio)], {"M1": 1000.0})
+        self.assertAlmostEqual(righe[0]["Venduto dell'intervallo"], 100.0)
+
 
 class TestGrezzi(unittest.TestCase):
 
