@@ -74,9 +74,10 @@ playwright install chromium</code></pre>
       <h3>Cartelle di download (Impostazioni)</h3>
       <p class="sub">In <strong>⚙ Impostazioni</strong> si imposta la cartella di download di default e, se serve, una cartella diversa per ogni tipo di documento.</p>
       <ul>
-        <li>Per impostazione predefinita tutti i download vanno in <strong>un'unica cartella</strong>, in sottocartelle per tipo e codice fiscale (es. <code>FattureEmesse_&lt;CF&gt;</code>).</li>
-        <li>Spuntando <strong>«personalizza»</strong> accanto a una classe (fatture emesse, ricevute, transfrontaliere, massive, corrispettivi, bolli) si assegna a quel tipo una <strong>cartella dedicata</strong>.</li>
-        <li>L'opzione <strong>«senza sottocartella»</strong> (per ciascun tipo) salva i file <strong>direttamente</strong> nella cartella scelta, senza creare la sottocartella: utile per importarli nelle directory dei <strong>gestionali di contabilità</strong>.</li>
+        <li>I file di ogni soggetto finiscono in una cartella con il suo nome e la sua partita IVA (es. <code>ROSSI SRL - 01234567890</code>), ritrovata anche se la denominazione cambia.</li>
+        <li>Nel riquadro <strong>«Organizzazione delle cartelle»</strong> si sceglie come organizzarla: <strong>per ditta</strong>, con una sottocartella per tipo di documento (Fatture emesse, Fatture ricevute, Corrispettivi, Bolli virtuali, ...) e, se si vuole, una per anno; oppure <strong>per sessione</strong>, con una cartella per ogni download intitolata con data e ora e un file <code>sessione.txt</code> che riassume periodo, tipi ed esito.</li>
+        <li>Spuntando <strong>«personalizza»</strong> accanto a una classe (fatture emesse, ricevute, transfrontaliere, massive, corrispettivi, bolli) si assegna a quel tipo una <strong>cartella dedicata</strong>, dentro la quale vale l'organizzazione scelta.</li>
+        <li>L'opzione <strong>«senza sottocartella»</strong> (per ciascun tipo) salva i file <strong>direttamente</strong> nella cartella scelta, senza cartella del soggetto né sottocartelle: utile per importarli nelle directory dei <strong>gestionali di contabilità</strong>.</li>
       </ul>
 
       <h3>Elenco fatture in CSV (formato Agenzia delle Entrate)</h3>
@@ -120,6 +121,8 @@ playwright install chromium</code></pre>
         <tr><td><code>--backend {requests,browser,sso}</code></td><td>Backend di login. Default: <code>requests</code> (nessun browser). <code>sso</code> = accesso con SPID/CIE: si apre il browser e ci si autentica a mano, <code>--pin</code> e <code>--password</code> non vengono usati.</td></tr>
         <tr><td><code>--no-headless</code></td><td>Mostra la finestra del browser (solo backend <code>browser</code>).</td></tr>
         <tr><td><code>--dest DIR</code></td><td>Cartella di destinazione dei download. Default: <code>./Download</code>.</td></tr>
+        <tr><td><code>--cartelle {ditta,sessione}</code></td><td>Organizzazione delle cartelle: per ditta (tipo di documento e anno) o per sessione (una cartella per lancio, con data e ora). Default: <code>ditta</code>.</td></tr>
+        <tr><td><code>--no-anno</code></td><td>Con <code>--cartelle ditta</code>, niente sottocartella per anno.</td></tr>
         <tr><td><code>--csv-ade</code></td><td>Genera anche il CSV dell'elenco nel formato «Esporta la tabella» del portale (solo comandi di download).</td></tr>
         <tr><td><code>--dry-run</code></td><td>Mostra cosa verrebbe eseguito, senza fare login né download.</td></tr>
       </table>
