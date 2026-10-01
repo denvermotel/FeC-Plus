@@ -40,7 +40,7 @@ class TestElencoFattureCsvAde(unittest.TestCase):
         self.voci = [_voce()]
         originale = fec_utility._lista_fatture
 
-        def finta(auth, tipo, dal, al):
+        def finta(auth, tipo, dal, al, log=None):
             self.blocchi.append((dal, al))
             return list(self.voci)
 

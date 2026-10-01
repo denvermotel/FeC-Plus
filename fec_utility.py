@@ -51,7 +51,7 @@ import requests
 
 from ade_auth import AuthResult, IVASERVIZI, unix_time
 from fec_download import (_cartella, Controllo, DownloadError,  # noqa: F401
-                          HTTP_TIMEOUT)
+                          HTTP_TIMEOUT, avviso_ade, controlla_avviso_elenco)
 from fec_queue import spezza_periodo
 
 
@@ -116,7 +116,7 @@ TIPI_ELENCO: dict[str, tuple[str, str]] = {
 }
 
 
-def _lista_fatture(auth: AuthResult, tipo: str, dal: str, al: str) -> list[dict]:
+def _lista_fatture(auth: AuthResult, tipo: str, dal: str, al: str, log=print) -> list[dict]:
     """
     Elenco fatture (voci JSON grezze) per il blocco [dal, al] (GGMMAAAA).
     Stesse liste usate da `fec_download._scarica_da_lista`, qui senza scaricare i file.
@@ -143,7 +143,9 @@ def _lista_fatture(auth: AuthResult, tipo: str, dal: str, al: str) -> list[dict]
     except ValueError:
         raise DownloadError("Risposta non in formato JSON: probabile sessione "
                             "scaduta o redirect alla pagina di login.")
-    return data.get("fatture") or []
+    voci = data.get("fatture") or []
+    controlla_avviso_elenco(data, voci, log, "l'elenco fatture")
+    return voci
 
 
 def _avviso_dettaglio(dati: dict) -> str | None:
@@ -154,10 +156,7 @@ def _avviso_dettaglio(dati: dict) -> str | None:
     "severity": "WARNING", ...}], "idFattura": "", ...}`: un errore temporaneo
     lato AdE distinto da un guasto HTTP/di rete. None se il dettaglio è valido.
     """
-    for msg in (dati.get("messages") or []):
-        if str(msg.get("severity", "")).upper() in ("WARNING", "ERROR"):
-            return str(msg.get("message") or "Dati non disponibili")
-    return None
+    return avviso_ade(dati)
 
 
 def _dettaglio_fattura(auth: AuthResult, fattura_file: str, log=print,
@@ -517,7 +516,7 @@ def elenco_fatture_excel(auth: AuthResult, cf_cliente: str, piva: str, tipo: str
             control.check()
         if len(blocchi) > 1:
             log(f"  Blocco {b_dal} -> {b_al}: richiedo l'elenco...")
-        voci.extend(_lista_fatture(auth, tipo, b_dal, b_al))
+        voci.extend(_lista_fatture(auth, tipo, b_dal, b_al, log=log))
     log(f"Trovate {len(voci)} fatture nell'intervallo.")
     if not voci:
         raise NessunDato("Nessuna fattura trovata nell'intervallo richiesto: "
@@ -572,7 +571,7 @@ def elenco_fatture_csv_ade(auth: AuthResult, cf_cliente: str, piva: str, tipo: s
             control.check()
         if len(blocchi) > 1:
             log(f"  Blocco {b_dal} -> {b_al}: richiedo l'elenco...")
-        voci.extend(_lista_fatture(auth, tipo, b_dal, b_al))
+        voci.extend(_lista_fatture(auth, tipo, b_dal, b_al, log=log))
     log(f"Trovate {len(voci)} fatture nell'intervallo.")
     if not voci:
         raise NessunDato("Nessuna fattura trovata nell'intervallo richiesto: "
@@ -823,7 +822,7 @@ def dump_json_esempio(auth: AuthResult, tipo: str, dal: str, al: str,
     contenere dati personali reali: tenerli in `_materiale/` (fuori da Git).
     """
     b_dal, b_al = spezza_periodo(dal, al, "%d%m%Y")[0]
-    voci = _lista_fatture(auth, tipo, b_dal, b_al)
+    voci = _lista_fatture(auth, tipo, b_dal, b_al, log=log)
     os.makedirs(dest_dir, exist_ok=True)
     percorso = os.path.join(dest_dir, f"dump_lista_{tipo}.json")
     with open(percorso, "w", encoding="utf-8") as fh:

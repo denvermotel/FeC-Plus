@@ -162,6 +162,32 @@ class DownloadResult:
     metadati: int
 
 
+def avviso_ade(dati) -> str | None:
+    """Testo del primo avviso WARNING/ERROR in `messages[]`, o None."""
+    if not isinstance(dati, dict):
+        return None
+    for msg in (dati.get("messages") or []):
+        if (isinstance(msg, dict)
+                and str(msg.get("severity", "")).upper() in ("WARNING", "ERROR")):
+            return str(msg.get("message") or "Dati non disponibili")
+    return None
+
+
+def controlla_avviso_elenco(dati, elenco: list, log=print, cosa: str = "l'elenco") -> None:
+    """
+    Un elenco vuoto accompagnato da un avviso dell'AdE (per esempio «Dati
+    momentaneamente non disponibili») è un guasto del portale, non un periodo
+    senza documenti: va detto all'utente. «Documenti non trovati» invece è
+    l'esito normale di un periodo vuoto.
+    """
+    avviso = avviso_ade(dati)
+    if avviso is None or "non trovat" in avviso.lower():
+        return
+    if not elenco:
+        raise DownloadError(f"L'Agenzia delle Entrate non ha restituito {cosa}: {avviso}")
+    log(f"   ⚠️  Avviso dell'Agenzia delle Entrate: {avviso}")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Helper interni
 # ─────────────────────────────────────────────────────────────────────────────
@@ -373,6 +399,7 @@ def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
             "La risposta non contiene l'elenco 'fatture' atteso "
             f"(chiavi ricevute: {sorted(data)[:8]})."
         )
+    controlla_avviso_elenco(data, fatture, log, "l'elenco fatture")
     if not fatture:
         log("Nessuna fattura trovata nell'intervallo richiesto.")
         if progresso is not None:
