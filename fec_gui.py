@@ -547,20 +547,6 @@ class FecGui:
                 "Preferenze salvate. Credenziali NON salvate su questo computer "
                 "(file credenziali rimosso).")
 
-    def _dest_classe(self, key: str) -> tuple[str, bool]:
-        """Risolve (cartella_base, crea_sottocartella) per una classe di documento.
-
-        Usa la cartella personalizzata della classe se «personalizza» è attivo e il
-        path è valorizzato; altrimenti la cartella di default (`std_destdir`).
-        """
-        default = self.std_destdir.get().strip() or DEFAULT_DEST_DIR
-        vars_ = self.dirclassi.get(key)
-        if not vars_:
-            return default, True
-        path = vars_["path"].get().strip()
-        base = path if (vars_["personalizza"].get() and path) else default
-        return base, not bool(vars_["senza_sotto"].get())
-
     def _config_cartelle(self):
         """Organizzazione delle cartelle letta dalle Impostazioni. Va chiamata sul
         thread Tk prima di avviare il lavoro: fissa anche il timestamp del lancio."""
@@ -4178,7 +4164,8 @@ class FecGui:
             return
 
         classe, chiave_richiesta = self._RICHIESTA_MASSIVA_OPS[tipo]
-        destdir, sotto = self._dest_classe(classe)
+        config = self._config_cartelle()
+        chiave_cartella = "massive_corrispettivi" if classe == "corrispettivi" else "massive"
 
         def op(res, log, fq, ctrl, prog):
             # P.IVA non obbligatoria: se vuota, si deduce dall'utenza di lavoro
@@ -4201,10 +4188,12 @@ class FecGui:
                 raise fq.DownloadError(
                     "P.IVA non indicata e non deducibile (non presente nell'utenza attiva "
                     "né in anagrafica deleghe): indicala manualmente.")
+            dest = self._destinazione(config, chiave_cartella, res, cfcl, piva_eff, cf, log)
             codici = fq.esegui_richiesta(res, chiave_richiesta, dal=dal, al=al, cf_cliente=cfcl,
-                                         piva=piva_eff, dest_dir=destdir, sottocartella=sotto,
-                                         control=ctrl, log=log)
+                                         piva=piva_eff, dest_dir=dest.cartella,
+                                         sottocartella=False, control=ctrl, log=log)
             self._registra_richieste_massive(codici, chiave_richiesta, cfcl, piva_eff, dal, al, log)
+            return [dest.radice]
 
         self._esegui_in_process(cfcl, piva, _profilo_da_modalita(self.modalita.get()),
             f"Richiesta Massiva {tipo}", op)
@@ -4478,6 +4467,7 @@ class FecGui:
         backend = self._backend_attivo()
         headless = bool(self.headless_var.get())
         estrai_zip = bool(self.estrai_zip_risultati_massivi.get())
+        config = self._config_cartelle()
 
         gruppi = {}
         for r in selezionate:
@@ -4526,7 +4516,11 @@ class FecGui:
                     for r in righe_gruppo:
                         control.check()
                         classe = "risultati_massive" if r["tipo_ade"] == "FATT" else "risultati_corrispettivi"
-                        destdir, sotto = self._dest_classe(classe)
+                        import fec_directory
+                        dest = self._destinazione(
+                            config, classe, auth, cfcl, piva, cf, log,
+                            anno_periodo=fec_directory.anno_da_data(r.get("dal")))
+                        destdir, sotto = dest.cartella, False
                         log(f"\n[{r['etichetta']}] id {r['id_richiesta']}...")
                         try:
                             salvati = fec_download.scarica_risposta_massiva(
@@ -4679,16 +4673,21 @@ class FecGui:
         trim_ui = self.bolli_trim.get().strip()
         trim = "" if trim_ui == "Tutto l'anno" else trim_ui
         anno = self.bolli_anno.get().strip()
-        destdir, sotto = self._dest_classe("bolli")
+        config = self._config_cartelle()
 
         if not self._validate(CF=cf, PIN=pin, Password=pwd, **{"CF Studio": cfst},
                               **{"CF Cliente": cfcl},
                               Trimestre=trim_ui, Anno=anno):
             return
 
-        op = lambda res, log, fq, ctrl, prog: fq.esegui_richiesta(
-            res, "bolli", cf_cliente=cfcl, piva=piva, trimestre=trim, anno=anno,
-            dest_dir=destdir, sottocartella=sotto, control=ctrl, log=log)
+        def op(res, log, fq, ctrl, prog):
+            dest = self._destinazione(config, "bolli", res, cfcl, piva, cf, log,
+                                      anno_periodo=anno or None)
+            fq.esegui_richiesta(res, "bolli", cf_cliente=cfcl, piva=piva, trimestre=trim,
+                                anno=anno, dest_dir=dest.cartella, sottocartella=False,
+                                control=ctrl, log=log)
+            return [dest.radice]
+
         self._esegui_in_process(cfcl, piva, _profilo_da_modalita(self.modalita.get()),
             f"Bolli {trim_ui}/{anno}", op)
 
@@ -4869,7 +4868,7 @@ class FecGui:
         dal = self.util_dal.get().strip()
         al = self.util_al.get().strip()
         tipo_ui = self.util_tipo.get()
-        destdir, sotto = self._dest_classe("utility")
+        config = self._config_cartelle()
         corrispettivi = tipo_ui == "Corrispettivi"
         formato_csv = self.util_formato.get() == "csv"
 
@@ -4908,7 +4907,16 @@ class FecGui:
                     log(f"P.IVA non indicata: uso quella dell'utenza attiva ({piva_eff}).")
             percorsi = []
             avvisi = []
+            radici: list[str] = []
             for sd, sa in self._util_sotto_periodi(dal, al, gran, log):
+                import fec_directory
+                dest = self._destinazione(
+                    config, "elenco_corrispettivi" if corrispettivi else "elenchi", res,
+                    cfcl, piva_eff if corrispettivi else piva, cf, log,
+                    anno_periodo=fec_directory.anno_da_data(sd))
+                destdir, sotto = dest.cartella, False
+                if dest.radice not in radici:
+                    radici.append(dest.radice)
                 try:
                     if corrispettivi:
                         import fec_corrispettivi
@@ -4934,7 +4942,7 @@ class FecGui:
                          f"frazionando il periodo:\n\n{testo}")
                 self.root.after(0, lambda: messagebox.showwarning(
                     titolo, corpo, parent=self.root))
-            return percorsi
+            return radici or percorsi
 
         self._esegui_in_process(cfcl, piva, _profilo_da_modalita(self.modalita.get()),
             f"Elenco {'CSV' if formato_csv else 'Excel'} {tipo_ui}", op)
