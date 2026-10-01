@@ -3848,18 +3848,20 @@ class FecGui:
         includi_disposizione = bool(self.std_includi_disposizione.get())
 
         def _op_emesse(res, log, fq, ctrl, prog):
-            esiti = [fq.esegui_richiesta(res, "emesse", dal=dal, al=al, cf_cliente=cfcl,
+            esito_emesse = fq.esegui_richiesta(res, "emesse", dal=dal, al=al, cf_cliente=cfcl,
                                 dest_dir=d_em, sottocartella=s_em, control=ctrl, log=log,
                                 progresso=prog,
                                 escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m, csv_ade=csv_ade,
-                                filtro_piva=filtro_piva, filtro_cf=filtro_cf)]
+                                filtro_piva=filtro_piva, filtro_cf=filtro_cf)
+            esiti = [esito_emesse]
             if includi_trans:
                 log("\n↪  Aggiungo in coda: Transfrontaliere Emesse (stesso periodo)...")
                 esiti.append(fq.esegui_richiesta(res, "trans_emesse", dal=dal, al=al, cf_cliente=cfcl,
                                     dest_dir=d_te, sottocartella=s_te, control=ctrl, log=log,
                                     progresso=prog,
                                     escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m, csv_ade=csv_ade,
-                                    filtro_piva=filtro_piva, filtro_cf=filtro_cf))
+                                    filtro_piva=filtro_piva, filtro_cf=filtro_cf,
+                                    escludi_id_invio=esito_emesse.id_invio_elenco))
             return esiti
 
         def _op_ricevute(res, log, fq, ctrl, prog):

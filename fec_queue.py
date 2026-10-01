@@ -145,6 +145,7 @@ def _somma_download(risultati: list[DownloadResult]) -> DownloadResult:
         cartella=primo.cartella,
         fatture=sum(r.fatture for r in risultati),
         metadati=sum(r.metadati for r in risultati),
+        id_invio_elenco=set().union(*(r.id_invio_elenco for r in risultati)),
     )
 
 
