@@ -19,10 +19,13 @@ from __future__ import annotations
 __version__ = "0.04 dev"
 
 import re
+import requests
 from dataclasses import dataclass
 from datetime import datetime
 
 from ade_auth import IVASERVIZI, unix_time
+from fec_download import DownloadError, HTTP_TIMEOUT, controlla_avviso_elenco
+from fec_queue import spezza_periodo
 from fec_utility import _campo, _data_it, _importo, _righe_riepilogo_iva
 
 BASE = f"{IVASERVIZI}/cons/cons-services/rs/corrispettivi"
@@ -382,3 +385,90 @@ def righe_da_grezzi(invii: list[tuple[dict, dict | None]]) -> list[dict]:
             riga["Venduto"] = _importo(_campo(voce, "importo"))
         righe.append(riga)
     return righe
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Chiamate HTTP
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _get_json(auth, url: str, cosa: str) -> dict:
+    try:
+        r = auth.session.get(url, headers=auth.headers, verify=False, timeout=HTTP_TIMEOUT)
+    except requests.exceptions.RequestException as exc:
+        raise DownloadError(f"Nessuna risposta dall'AdE per {cosa}: {exc}.")
+    if r.status_code != 200:
+        raise DownloadError(f"Richiesta non riuscita per {cosa} (HTTP {r.status_code}). "
+                            "La sessione potrebbe essere scaduta o la P.IVA non "
+                            "appartenere all'utenza.")
+    try:
+        dati = r.json()
+    except ValueError:
+        raise DownloadError(f"Risposta non in formato JSON per {cosa}: probabile "
+                            "sessione scaduta.")
+    return dati if isinstance(dati, dict) else {}
+
+
+def sintesi(auth, dal: str, al: str, piva: str) -> dict:
+    """Conteggio degli invii del periodo per canale."""
+    return _get_json(auth, f"{BASE}/sintesi/dal/{dal}/al/{al}/piva/{piva}?v={unix_time()}",
+                     "la sintesi corrispettivi")
+
+
+def elenco_blocco(auth, codice: str, dal: str, al: str, piva: str,
+                  log=print) -> tuple[list[dict], int | None]:
+    """Voci di un canale per un blocco di periodo e totale dichiarato dal portale."""
+    tipo = TIPI[codice]
+    url = f"{BASE}{tipo.percorso_elenco.format(dal=dal, al=al, piva=piva)}?v={unix_time()}"
+    dati = _get_json(auth, url, f"l'elenco «{tipo.etichetta}»")
+    voci = [v for v in (dati.get(tipo.chiave_elenco) or []) if isinstance(v, dict)]
+    controlla_avviso_elenco(dati, voci, log, f"l'elenco «{tipo.etichetta}»")
+    totale = dati.get(tipo.campo_totale)
+    return voci, (int(_importo(totale)) if totale not in (None, "") else None)
+
+
+def dettaglio(auth, codice: str, voce: dict, piva: str) -> dict | None:
+    """Dettaglio JSON di una voce; None su qualunque errore (riga coi soli totali)."""
+    url = url_dettaglio(codice, voce, piva)
+    if url is None:
+        return None
+    try:
+        return _get_json(auth, url, "il dettaglio")
+    except DownloadError:
+        return None
+
+
+# Un blocco troncato si richiede di nuovo a pezzi più piccoli: prima mese per mese,
+# poi settimana per settimana.
+_LIVELLI = ({"max_mesi": 1}, {"max_giorni": 7})
+
+
+def elenco_completo(scarica, dal: str, al: str, etichetta: str, log=print,
+                    avvisi: list | None = None) -> list[dict]:
+    """
+    Voci del periodo [dal, al] (GGMMAAAA) per un canale. `scarica(dal, al)`
+    restituisce (voci, totale). Se il portale tronca l'elenco, il periodo si
+    frazioni finché le righe tornano tutte; se non basta, `avvisi` riceve una riga.
+    """
+    voci, totale = scarica(dal, al)
+    if totale is None or len(voci) >= totale:
+        return voci
+    log(f"   ⚠️  Elenco «{etichetta}» {dal}-{al} troncato dall'AdE ({len(voci)} su "
+        f"{totale}): lo richiedo a periodi più brevi.")
+    return _frazionato(scarica, dal, al, etichetta, log,
+                       avvisi if avvisi is not None else [], 0)
+
+
+def _frazionato(scarica, dal, al, etichetta, log, avvisi, livello) -> list[dict]:
+    risultato: list[dict] = []
+    for d, a in spezza_periodo(dal, al, "%d%m%Y", **_LIVELLI[livello]):
+        voci, totale = scarica(d, a)
+        if totale is not None and len(voci) < totale:
+            if livello + 1 < len(_LIVELLI):
+                risultato.extend(_frazionato(scarica, d, a, etichetta, log, avvisi,
+                                             livello + 1))
+                continue
+            avvisi.append(f"{etichetta} {d}-{a}: elenco troncato dall'AdE "
+                          f"({len(voci)} su {totale}).")
+            log(f"   ⚠️  {avvisi[-1]}")
+        risultato.extend(voci)
+    return risultato
