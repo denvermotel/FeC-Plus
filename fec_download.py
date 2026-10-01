@@ -329,6 +329,13 @@ def _match_controparte(fattura: dict, filtro_piva: str, filtro_cf: str,
     return False   # voce senza alcun dato di controparte: non verificabile, esclusa
 
 
+def _in_predisposizione(fattura: dict) -> bool:
+    """Il portale prepara il file entro 72 ore dalla consegna: fino ad allora
+    `fileDownload.fileDownload` vale 2 e la GET del file non restituisce nulla."""
+    info = fattura.get("fileDownload") or {}
+    return isinstance(info, dict) and str(info.get("fileDownload", "")).strip() == "2"
+
+
 def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
                       log=print, control: "Controllo | None" = None,
                       escludi_scartate_pa: bool = True,
@@ -439,7 +446,7 @@ def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
     if progresso is not None:
         progresso.totale(len(fatture))
 
-    n_fatture = n_metadati = 0
+    n_fatture = n_metadati = n_in_attesa = 0
     for fattura in fatture:
         if control is not None:
             control.check()   # pausa/annullamento cooperativo tra un file e l'altro
@@ -447,6 +454,14 @@ def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
 
         if escludi_scartate_pa and _e_scartata_pa(auth, fattura_file, log):
             log(f"   ⏭️  Fattura {fattura_file} rifiutata dalla P.A.: saltata.")
+            if progresso is not None:
+                progresso.esito(ESITO_SALTATO)
+            continue
+
+        if _in_predisposizione(fattura):
+            n_in_attesa += 1
+            log(f"   ⏳ Fattura {fattura_file}: file in preparazione presso l'AdE "
+                "(disponibile entro 72 ore dalla consegna), saltata.")
             if progresso is not None:
                 progresso.esito(ESITO_SALTATO)
             continue
@@ -502,6 +517,10 @@ def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
             log(f"Scarico metadati -> {fmetadato}_metadato.xml")
             with open(os.path.join(dest_dir, f"{fmetadato}_metadato.xml"), "wb") as f:
                 f.write(r3.content)
+
+    if n_in_attesa:
+        log(f"\n⏳ {n_in_attesa} fatture non ancora disponibili sul portale: "
+            "ripeti il download fra qualche giorno.")
 
     return n_fatture, n_metadati
 
