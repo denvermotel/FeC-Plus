@@ -277,17 +277,23 @@ def _matricola(voce: dict) -> str:
 
 
 def venduto_da(voce: dict, dettaglio: dict | None) -> float:
-    """Contatore del venduto: dal dettaglio se c'è, altrimenti `importo` dell'elenco."""
+    """Contatore del venduto: `importo` dell'elenco; fallback al dettaglio `venduto` se assente."""
+    importo = _campo(voce, "importo")
+    if importo not in (None, ""):
+        return _importo(importo)
     venduto = _campo(_dati_da(dettaglio), "venduto")
-    return _importo(venduto if venduto is not None else _campo(voce, "importo"))
+    return _importo(venduto)
 
 
 def letture_precedenti(voci: list[dict], inizio: datetime) -> dict[str, float]:
-    """Per ogni matricola, il contatore dell'ultimo invio anteriore a `inizio`."""
+    """Per ogni matricola, il contatore dell'ultimo invio CUMULATO anteriore a `inizio`."""
     ultime: dict[str, tuple[datetime, float]] = {}
     for voce in voci:
         quando = ordine(voce)
         if quando >= inizio:
+            continue
+        modalita = _s(voce, "modalitaRilevazione") or "CUMULATO"
+        if modalita.upper() != "CUMULATO":
             continue
         m = _matricola(voce)
         if m not in ultime or quando > ultime[m][0]:
@@ -295,9 +301,12 @@ def letture_precedenti(voci: list[dict], inizio: datetime) -> dict[str, float]:
     return {m: valore for m, (_, valore) in ultime.items()}
 
 
-def _base_da(voce: dict) -> dict:
+def _base_da(voce: dict, dettaglio: dict | None = None) -> dict:
+    modalita = (_s(voce, "modalitaRilevazione") or
+                _s(_campo(dettaglio, "datiContabiliDA"), "modalitaRilevazione") or
+                _s(dettaglio or {}, "modalitaRilevazione"))
     return {"ID Invio": _s(voce, "idInvio"), "Data": _data_voce(voce),
-            "Matricola": _matricola(voce), "Modalità": _s(voce, "modalitaRilevazione"),
+            "Matricola": _matricola(voce), "Modalità": modalita,
             "_gruppo": _matricola(voce), "_ordinamento": ordine(voce), "iva": {}}
 
 
@@ -314,7 +323,7 @@ def righe_da_differenza(invii: list[tuple[dict, dict | None]],
         for voce, det in lista:
             contatore = venduto_da(voce, det)
             modalita = _s(voce, "modalitaRilevazione") or _s(det or {}, "modalitaRilevazione")
-            riga = _base_da(voce)
+            riga = _base_da(voce, det)
             riga["Totale venduto (contatore)"] = contatore
             riga["Note"] = ""
             if modalita.upper() != "CUMULATO":
@@ -327,13 +336,21 @@ def righe_da_differenza(invii: list[tuple[dict, dict | None]],
                 riga["Venduto dell'intervallo"] = None
                 riga["Note"] = ("Lettura precedente non trovata: venduto dell'intervallo "
                                 "non calcolabile.")
+                venduto_detail = _campo(_dati_da(det), "venduto")
+                if venduto_detail is not None and abs(_importo(venduto_detail) - contatore) > 0.005:
+                    riga["Note"] += f" Il venduto del dettaglio ({_importo(venduto_detail):.2f}) differisce dal totale dell'elenco ({contatore:.2f}): verificare."
             else:
                 riga["Lettura precedente"] = prec
                 riga["Venduto dell'intervallo"] = round(contatore - prec, 2)
                 if contatore < prec:
                     riga["Note"] = ("Contatore inferiore alla lettura precedente "
                                     "(azzeramento o sostituzione della scheda?): verificare.")
-            prec = contatore
+                else:
+                    venduto_detail = _campo(_dati_da(det), "venduto")
+                    if venduto_detail is not None and abs(_importo(venduto_detail) - contatore) > 0.005:
+                        riga["Note"] = f"Il venduto del dettaglio ({_importo(venduto_detail):.2f}) differisce dal totale dell'elenco ({contatore:.2f}): verificare."
+            if modalita.upper() == "CUMULATO":
+                prec = contatore
             righe.append(riga)
     return righe
 
@@ -343,7 +360,7 @@ def righe_da_grezzi(invii: list[tuple[dict, dict | None]]) -> list[dict]:
     righe: list[dict] = []
     for voce, det in invii:
         dati = _dati_da(det)
-        riga = _base_da(voce)
+        riga = _base_da(voce, det)
         for intestazione, campo in CAMPI_DA_GREZZI:
             riga[intestazione] = _importo(_campo(dati, campo))
         if not dati:

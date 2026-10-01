@@ -67,9 +67,40 @@ class TestDifferenza(unittest.TestCase):
             [(_voce("10", "03/07/2026 10:00", "100,00"), None)], {"M1": 95116.94})
         self.assertIn("inferiore", righe[0]["Note"])
 
-    def test_venduto_dal_dettaglio_prima_che_dall_elenco(self):
-        self.assertEqual(fc.venduto_da(_voce("1", "", "10,00"), _dettaglio("12,00")), 12.0)
-        self.assertEqual(fc.venduto_da(_voce("1", "", "10,00"), None), 10.0)
+    def test_venduto_dall_elenco_prima_che_dal_dettaglio(self):
+        self.assertEqual(fc.venduto_da(_voce("1", "", "10,00"), _dettaglio("12,00")), 10.0)
+        self.assertEqual(fc.venduto_da(_voce("1", "", ""), _dettaglio("12,00")), 12.0)
+
+    def test_divergenza_dettaglio_elenco_segnalata(self):
+        righe = fc.righe_da_differenza(
+            [(_voce("10", "03/07/2026 10:00", "1100,00"), _dettaglio("1150,00"))],
+            {"M1": 1000.0})
+        self.assertAlmostEqual(righe[0]["Venduto dell'intervallo"], 100.0)
+        self.assertIn("differisce", righe[0]["Note"])
+
+    def test_lettura_non_cumulativa_non_fa_da_base(self):
+        invii = [(_voce("1", "01/07/2026 10:00", "1100,00"), None),
+                 (_voce("2", "02/07/2026 10:00", "50,00", modalita="PUNTUALE"), None),
+                 (_voce("3", "03/07/2026 10:00", "1300,00"), None)]
+        righe = fc.righe_da_differenza(invii, {"M1": 1000.0})
+        self.assertEqual(righe[2]["Lettura precedente"], 1100.0)
+        self.assertAlmostEqual(righe[2]["Venduto dell'intervallo"], 200.0)
+
+    def test_letture_precedenti_ignora_non_cumulative(self):
+        voci = [_voce("1", "01/07/2026 10:00", "1100,00"),
+                _voce("2", "02/07/2026 10:00", "50,00", modalita="PUNTUALE"),
+                _voce("3", "03/07/2026 10:00", "1150,00")]
+        precedenti = fc.letture_precedenti(voci, datetime(2026, 7, 4))
+        self.assertEqual(precedenti.get("M1"), 1150.0)
+
+    def test_modalita_dal_dettaglio(self):
+        voce = {"idInvio": "10", "timeRilevazione": "03/07/2026 10:00",
+                "matricolaDispositivo": "M1", "importo": "95500,00"}
+        dettaglio = {"datiContabiliDA": {"venduto": "95500,00", "vendutoContante": "1,00",
+                                        "incassatoNoContante": "2,00",
+                                        "modalitaRilevazione": "CUMULATO"}}
+        righe = fc.righe_da_grezzi([(voce, dettaglio)])
+        self.assertEqual(righe[0]["Modalità"], "CUMULATO")
 
 
 class TestGrezzi(unittest.TestCase):
