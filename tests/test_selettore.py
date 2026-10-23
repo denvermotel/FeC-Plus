@@ -172,7 +172,7 @@ class TestWidget(unittest.TestCase):
     def test_aggiorna_tiene_i_scelti(self):
         self.s.aggiungi("Verdi Luigi", "VRDLGI70B02F205X")
         self.s.aggiorna(ROWS[:1])
-        self.assertEqual(self.s.info_var.get(), "1 deleghe")
+        self.assertEqual(self.s.info_var.get(), "1 delega")
         self.assertEqual(len(self.s.scelti), 1)
 
 

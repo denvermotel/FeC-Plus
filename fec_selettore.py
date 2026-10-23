@@ -1,8 +1,7 @@
 # FeC-Plus - v0.04 dev
 """fec_selettore.py - Selettore dei soggetti (deleghe) con ricerca per nominativo e scelta multipla.
 
-Derivato da `risc_selettore.SelettoreSoggetto` (A-Risc) e da `cassetto_selettore` (Cassetto-Plus),
-che scelgono un solo soggetto. Un campo di ricerca con tendina a comparsa: con le frecce e Invio,
+Un campo di ricerca con tendina a comparsa: con le frecce e Invio,
 o con un clic, una riga viene aggiunta all'elenco dei soggetti scelti. Un C.F./P.IVA valido
 scritto a mano che non è tra le deleghe viene proposto come ultima riga. Con un solo soggetto
 scelto compare il campo P.IVA, opzionale (serve ai C.F. con più partite IVA); con più soggetti
@@ -74,6 +73,12 @@ _COL_TENUE = "#6b7280"
 _COL_BORDO = "#c5cad1"
 _COL_EVIDENZIATO = "#dbe8fb"
 _COL_ALTERNATO = "#f5f7fa"
+
+
+def _testo_deleghe(n: int) -> str:
+    if n == 0:
+        return "nessuna delega"
+    return "1 delega" if n == 1 else f"{n} deleghe"
 
 
 class SelettoreSoggetti(ttk.Frame):
@@ -210,7 +215,7 @@ class SelettoreSoggetti(ttk.Frame):
         self._opzioni = opzioni_soggetti(rows)
         self._pive = piva_per_cf(rows)
         n = len(self._opzioni)
-        self.info_var.set(f"{n} deleghe" if n else "nessuna delega")
+        self.info_var.set(_testo_deleghe(n))
         if self._aperta:
             self._filtra()
 
@@ -243,8 +248,12 @@ class SelettoreSoggetti(ttk.Frame):
         self._ridisegna()
 
     def aggiungi_tutte(self) -> None:
+        gia = {s.cf for s in self.scelti}
         for nome, cf in self._opzioni:
-            self.aggiungi(nome, cf)
+            if cf not in gia:
+                self.scelti.append(Soggetto(nome or cf, cf, self._pive.get(cf, "")))
+                gia.add(cf)
+        self._ridisegna()
 
     def svuota(self) -> None:
         self.scelti = []
