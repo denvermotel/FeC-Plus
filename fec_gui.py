@@ -1650,7 +1650,8 @@ class FecGui:
         fallisce non ferma gli altri. `fasi_previste` è il totale delle fasi di tutti i
         soggetti. `fine(esiti)` gira nel worker a coda finita, se almeno un soggetto è
         riuscito. `conta_soggetti` serve alle operazioni che non riportano fasi proprie:
-        con più soggetti, una fase e una tacca per soggetto. `profilo` è già il valore
+        con più soggetti, una fase e una tacca per soggetto, e il chiamante passa
+        `len(soggetti)` come `fasi_previste`. `profilo` è già il valore
         numerico risolto (vedi `_profilo_da_modalita`).
         Tutto gira in un worker thread, con log instradato nella console.
         """
@@ -1700,7 +1701,9 @@ class FecGui:
                     progresso.totale(1)
                 try:
                     return _accedi(s, precedente)
-                except AuthError:
+                except fec_download.DownloadAnnullato:
+                    raise
+                except Exception:
                     if conta:
                         progresso.esito(fec_download.ESITO_ERRORE)
                     raise
@@ -1767,15 +1770,15 @@ class FecGui:
                 # Un solo soggetto: i messaggi di sempre.
                 e = falliti[0]
                 progresso.conclusa()
-                if e.fase == "accesso":
+                if e.imprevisto:
+                    progresso.messaggio("Interrotto per un errore imprevisto.")
+                    self.root.after(0, self._mostra_errore, "Errore imprevisto", e.errore)
+                elif e.fase == "accesso":
                     # Coda FIFO: questo messaggio arriva dopo `conclusa` e vince su
                     # «Operazione completata.».
                     progresso.messaggio("Accesso non riuscito.")
                     self.root.after(0, self._mostra_errore, "Accesso non riuscito",
                                     f"Login fallito allo step «{e.step}».\n\n{e.errore}")
-                elif e.imprevisto:
-                    progresso.messaggio("Interrotto per un errore imprevisto.")
-                    self.root.after(0, self._mostra_errore, "Errore imprevisto", e.errore)
                 else:
                     progresso.messaggio("Operazione non riuscita.")
                     self.root.after(0, self._mostra_errore,
@@ -1786,7 +1789,8 @@ class FecGui:
             progresso.conclusa()
             if falliti:
                 n = len(falliti)
-                progresso.messaggio(f"{n} soggetti su {len(esiti)} non completati.")
+                progresso.messaggio(f"{n} soggetto su {len(esiti)} non completato." if n == 1
+                                    else f"{n} soggetti su {len(esiti)} non completati.")
                 elenco = "\n".join(f"• {e.soggetto.nome or e.soggetto.cf}: {e.errore}"
                                    for e in falliti[:15])
                 altri = "\n..." if n > 15 else ""

@@ -83,6 +83,31 @@ class TestCodaSoggetti(unittest.TestCase):
         self.assertTrue(esiti[0].imprevisto)
         self.assertEqual(esiti[0].errore, "percorso troppo lungo")
 
+    def test_errore_imprevisto_all_accesso_non_ferma_gli_altri(self):
+        def accedi(s, precedente):
+            self.chiamate.append((s.cf, precedente))
+            if s.cf == "CFB":
+                raise OSError("rete caduta")
+            return f"auth-{s.cf}"
+        esiti = fq.esegui_per_soggetti([A, B, C], accedi, lambda auth, s: s.cf,
+                                       log=self.log.append)
+        self.assertEqual([e.ok for e in esiti], [True, False, True])
+        self.assertEqual(esiti[1].fase, "accesso")
+        self.assertTrue(esiti[1].imprevisto)
+        self.assertEqual(esiti[1].errore, "rete caduta")
+        self.assertEqual(self.chiamate[-1], ("CFC", "auth-CFA"))
+
+    def test_errore_imprevisto_al_primo_accesso_segna_tutti(self):
+        def accedi(s, precedente):
+            self.chiamate.append((s.cf, precedente))
+            raise OSError("rete caduta")
+        esiti = fq.esegui_per_soggetti([A, B, C], accedi, lambda auth, s: s.cf,
+                                       log=self.log.append)
+        self.assertEqual(len(self.chiamate), 1)
+        self.assertEqual([e.fase for e in esiti], ["accesso"] * 3)
+        self.assertTrue(all(e.imprevisto for e in esiti))
+        self.assertEqual([e.soggetto for e in esiti], [A, B, C])
+
     def test_operazione_fallita_non_ferma_gli_altri(self):
         def operazione(auth, s):
             if s.cf == "CFA":

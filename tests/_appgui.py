@@ -54,7 +54,8 @@ class AppGuiCase(unittest.TestCase):
         self.root = tk.Tk()
         self.root.withdraw()
         self.addCleanup(self.root.destroy)
-        self.app = fec_gui.FecGui(self.root)
+        self.addCleanup(self._ferma_callback)
+        self.app =fec_gui.FecGui(self.root)
         self.base = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.base, True)
         self.app.std_destdir.set(self.base)
@@ -70,6 +71,23 @@ class AppGuiCase(unittest.TestCase):
         self.app.popup_fine_task.set(False)
         patch.object(fec_deleghe, "load_deleghe",
                      return_value=[dict(r) for r in DELEGHE]).start()
+
+    def _ferma_callback(self):
+        """Gira prima della distruzione della root: niente `after` pendenti su una finestra
+        che non c'è più (pompa del progresso, riposizionamento dei pannelli)."""
+        progresso = getattr(getattr(self, "app", None), "progresso", None)
+        if progresso is not None:
+            try:
+                progresso.ferma()
+            except Exception:  # noqa: BLE001 - pulizia best effort
+                pass
+        try:
+            for i in self.root.tk.call("after", "info"):
+                # Annullo a livello Tcl: `after_cancel` cancellerebbe anche il comando
+                # Python, che la destroy dei widget (DateEntry) poi tenta di rimuovere.
+                self.root.tk.call("after", "cancel", i)
+        except tk.TclError:
+            pass
 
     def carica_deleghe(self):
         """Mette le deleghe di comodo nella finestra e nei selettori."""

@@ -88,6 +88,11 @@ class TestEseguiPerSoggetti(AppGuiCase):
         self._esegui([ROSSI], operazione)
         self.assertEqual(self.errori, [("Errore imprevisto", "disco pieno")])
 
+    def test_errore_imprevisto_all_accesso_stesso_popup_di_prima(self):
+        self.autentica.side_effect = OSError("rete")
+        self._esegui([ROSSI])
+        self.assertEqual(self.errori, [("Errore imprevisto", "rete")])
+
     def test_credenziali_errate_con_piu_soggetti_un_solo_messaggio_di_accesso(self):
         self.autentica.side_effect = AuthError("login", "credenziali errate")
         self._esegui([ROSSI, VERDI])
@@ -114,6 +119,8 @@ class TestEseguiPerSoggetti(AppGuiCase):
         self.app.progresso.svuota()
         segmenti = self.app.modello_nastro.segmenti
         self.assertEqual([s.etichetta for s in segmenti], ["Rossi Mario", "Verdi Luigi"])
+        self.assertEqual([s.esiti for s in segmenti],
+                         [[fec_download.ESITO_OK], [fec_download.ESITO_ERRORE]])
 
     def test_secondo_soggetto_fallito_un_solo_popup_con_il_nome(self):
         self.cambio.side_effect = AuthError("utenza", "delega non valida")

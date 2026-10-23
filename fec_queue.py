@@ -384,6 +384,18 @@ def esegui_per_soggetti(soggetti, accedi, operazione, *, control=None,
                 break
             esiti.append(EsitoSoggetto(s, fase="accesso", step=exc.step, errore=exc.dettaglio))
             continue
+        except fd.DownloadAnnullato:
+            raise
+        except Exception as exc:  # noqa: BLE001 - rete o parsing all'accesso: come un accesso fallito
+            errore = str(exc) or exc.__class__.__name__
+            log(f"❌ Errore imprevisto all'accesso per {chi}: {exc!r}")
+            if auth is None:
+                for resto in soggetti[i - 1:]:
+                    esiti.append(EsitoSoggetto(resto, fase="accesso", imprevisto=True,
+                                               errore=errore))
+                break
+            esiti.append(EsitoSoggetto(s, fase="accesso", imprevisto=True, errore=errore))
+            continue
         try:
             esiti.append(EsitoSoggetto(s, esito=operazione(auth, s)))
         except fd.DownloadAnnullato:
