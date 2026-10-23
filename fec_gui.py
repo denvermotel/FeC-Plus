@@ -19,6 +19,7 @@ import json
 import sys
 
 import fec_deps
+import fec_selettore
 
 __version__ = "0.04 dev"
 
@@ -1628,11 +1629,29 @@ class FecGui:
     def _esegui_in_process(self, cfcl, piva, profilo: int, descrizione, operazione,
                            fasi_previste: int = 1):
         """
-        Autentica UNA volta in-process (backend/headless dalla scheda Test Login)
-        e poi esegue `operazione(res, log, fec_queue, control, progresso)` sull'AuthResult.
-        `operazione` deve chiamare `fec_queue.esegui_richiesta(...)`, che orchestra
-        lo spezzettamento dei periodi lunghi sopra fec_download. `profilo` è già il
-        valore numerico risolto (vedi `_profilo_da_modalita`), non la stringa combo.
+        Un solo soggetto, `cfcl`/`piva` anche vuoti (per le operazioni senza cliente, come
+        il dump di debug): `operazione(res, log, fec_queue, control, progresso)`.
+        Per più soggetti vedi `_esegui_per_soggetti`.
+        """
+        soggetto = fec_selettore.Soggetto(cfcl, cfcl, piva)
+        self._esegui_per_soggetti(
+            [soggetto], profilo, descrizione,
+            lambda res, _s, log, fq, ctrl, prog: operazione(res, log, fq, ctrl, prog),
+            fasi_previste)
+
+    def _esegui_per_soggetti(self, soggetti, profilo: int, descrizione, operazione,
+                             fasi_previste: int = 1, fine=None, conta_soggetti=False):
+        """
+        Autentica UNA volta in-process (backend/headless dalla scheda Test Login), poi per
+        ogni soggetto cambia utenza ed esegue
+        `operazione(res, soggetto, log, fec_queue, control, progresso)` sull'AuthResult.
+        La coda è `fec_queue.esegui_per_soggetti`: ogni soggetto fa il giro di sempre
+        (`fec_queue.esegui_richiesta`, che spezza i periodi lunghi), e un soggetto che
+        fallisce non ferma gli altri. `fasi_previste` è il totale delle fasi di tutti i
+        soggetti. `fine(esiti)` gira nel worker a coda finita, se almeno un soggetto è
+        riuscito. `conta_soggetti` serve alle operazioni che non riportano fasi proprie:
+        con più soggetti, una fase e una tacca per soggetto. `profilo` è già il valore
+        numerico risolto (vedi `_profilo_da_modalita`).
         Tutto gira in un worker thread, con log instradato nella console.
         """
         # Un'operazione alla volta. Il controllo va fatto QUI, prima di toccare
@@ -1663,58 +1682,121 @@ class FecGui:
         self.progresso.avvia_pompa()
         self._imposta_comandi_task(True)
         progresso = self.progresso
+        # Letti qui, sul thread Tk: il worker non deve toccare le variabili Tk.
+        popup_fine = bool(self.popup_fine_task.get())
+        aggiorna_deleghe = not self.deleghe_no_update_var.get()
+        conta = conta_soggetti and len(soggetti) > 1
 
         def task(log):
-            from ade_auth import autentica, Creds, AuthError
+            from ade_auth import autentica, seleziona_utenza, Creds, AuthError
             import fec_download
             import fec_queue
 
             log(f"\n{'─' * 60}\n▶  {descrizione} (in-process, backend: {backend})\n{'─' * 60}")
-            creds = Creds(nomeutente=cf, pin=pin, password=pwd, cfstudio=cfst,
-                          cf_cliente=cfcl, piva=piva, profilo=profilo)
-            try:
+
+            def accedi(s, precedente):
+                if conta:
+                    progresso.fase(s.nome or s.cf, 0, len(soggetti))
+                    progresso.totale(1)
+                try:
+                    return _accedi(s, precedente)
+                except AuthError:
+                    if conta:
+                        progresso.esito(fec_download.ESITO_ERRORE)
+                    raise
+
+            def _accedi(s, precedente):
+                creds = Creds(nomeutente=cf, pin=pin, password=pwd, cfstudio=cfst,
+                              cf_cliente=s.cf, piva=s.piva, profilo=profilo)
                 # Se la P.IVA non è indicata e il CF ne ha più d'una, il popup di
                 # scelta viene mostrato (solo backend requests; browser: ignorato).
-                res = autentica(creds, backend=backend, headless=headless, log=log,
-                                scegli_piva=self._chiedi_piva_thread)
-            except AuthError as exc:
-                log(f"\n❌ Login fallito allo step «{exc.step}»: {exc.dettaglio}")
-                progresso.conclusa()
-                # Coda FIFO: questo messaggio arriva dopo `conclusa` e vince su
-                # «Operazione completata.».
-                progresso.messaggio("Accesso non riuscito.")
-                self.root.after(0, self._mostra_errore, "Accesso non riuscito",
-                                f"Login fallito allo step «{exc.step}».\n\n{exc.dettaglio}")
-                return
-            msg_piva = f", P.IVA {res.piva}" if res.piva else ""
-            log(f"\n✅ Login OK - backend {res.backend}{msg_piva}. Avvio operazione...")
+                if precedente is None:
+                    res = autentica(creds, backend=backend, headless=headless, log=log,
+                                    scegli_piva=self._chiedi_piva_thread)
+                else:
+                    res = seleziona_utenza(precedente, creds, log=log,
+                                           scegli_piva=self._chiedi_piva_thread)
+                msg_piva = f", P.IVA {res.piva}" if res.piva else ""
+                if precedente is None:
+                    log(f"\n✅ Login OK - backend {res.backend}{msg_piva}. Avvio operazione...")
+                else:
+                    log(f"✅ Utenza cambiata{msg_piva}. Avvio operazione...")
 
-            # Arricchimento anagrafica deleghe da AdE (salvo spunta «non aggiornare»).
-            if cfcl and not self.deleghe_no_update_var.get():
+                # Arricchimento anagrafica deleghe da AdE (salvo spunta «non aggiornare»).
+                if s.cf and aggiorna_deleghe:
+                    try:
+                        import fec_anagrafica
+                        dati = fec_anagrafica.recupera(res, log=log)
+                        self._applica_aggiornamento_delega(s.cf, dati, log)
+                    except Exception as exc:  # noqa: BLE001 - non deve bloccare il download
+                        log(f"⚠️  Aggiornamento anagrafica non riuscito: {exc}")
+                return res
+
+            def lavora(res, s):
+                prog = (progresso if len(soggetti) == 1
+                        else fec_queue.ProgressoPrefissato(progresso, s.nome or s.cf))
                 try:
-                    import fec_anagrafica
-                    dati = fec_anagrafica.recupera(res, log=log)
-                    self._applica_aggiornamento_delega(cfcl, dati, log)
-                except Exception as exc:  # noqa: BLE001 - non deve bloccare il download
-                    log(f"⚠️  Aggiornamento anagrafica non riuscito: {exc}")
+                    esito = operazione(res, s, log, fec_queue, control, prog)
+                except fec_download.DownloadAnnullato:
+                    raise
+                except Exception:
+                    if conta:
+                        progresso.esito(fec_download.ESITO_ERRORE)
+                    raise
+                if conta:
+                    progresso.esito(fec_download.ESITO_OK)
+                return esito
 
             try:
-                esito = operazione(res, log, fec_queue, control, progresso)
+                esiti = fec_queue.esegui_per_soggetti(soggetti, accedi, lavora,
+                                                      control=control, log=log)
             except fec_download.DownloadAnnullato as exc:
                 log(f"\n⏹  {exc}")
                 progresso.conclusa(annullato=True)
                 return
-            except fec_download.DownloadError as exc:
-                log(f"\n❌ Operazione non riuscita: {exc}")
+            falliti = [e for e in esiti if not e.ok]
+            if fine is not None and len(falliti) < len(esiti):
+                fine(esiti)
+
+            # Credenziali errate: la coda si è fermata al primo accesso e tutti i soggetti
+            # portano lo stesso errore, che vale come quello di un soggetto solo.
+            nessun_accesso = (len(falliti) == len(esiti)
+                              and all(e.fase == "accesso" for e in falliti)
+                              and falliti[0].step != "utenza")
+            if falliti and (len(soggetti) == 1 or nessun_accesso):
+                # Un solo soggetto: i messaggi di sempre.
+                e = falliti[0]
                 progresso.conclusa()
-                progresso.messaggio("Operazione non riuscita.")
-                self.root.after(0, self._mostra_errore,
-                                f"{descrizione}: operazione non riuscita", str(exc))
+                if e.fase == "accesso":
+                    # Coda FIFO: questo messaggio arriva dopo `conclusa` e vince su
+                    # «Operazione completata.».
+                    progresso.messaggio("Accesso non riuscito.")
+                    self.root.after(0, self._mostra_errore, "Accesso non riuscito",
+                                    f"Login fallito allo step «{e.step}».\n\n{e.errore}")
+                elif e.imprevisto:
+                    progresso.messaggio("Interrotto per un errore imprevisto.")
+                    self.root.after(0, self._mostra_errore, "Errore imprevisto", e.errore)
+                else:
+                    progresso.messaggio("Operazione non riuscita.")
+                    self.root.after(0, self._mostra_errore,
+                                    f"{descrizione}: operazione non riuscita", e.errore)
                 return
+
             log("\n[Completato]")
             progresso.conclusa()
-            if self.popup_fine_task.get():
-                cartelle = self._cartelle_da_esito(esito)
+            if falliti:
+                n = len(falliti)
+                progresso.messaggio(f"{n} soggetti su {len(esiti)} non completati.")
+                elenco = "\n".join(f"• {e.soggetto.nome or e.soggetto.cf}: {e.errore}"
+                                   for e in falliti[:15])
+                altri = "\n..." if n > 15 else ""
+                titolo = (f"{descrizione}: {n} soggetto non completato" if n == 1
+                          else f"{descrizione}: {n} soggetti non completati")
+                self.root.after(0, self._mostra_errore, titolo,
+                                f"Completati {len(esiti) - n} soggetti su {len(esiti)}. "
+                                f"Non completati:\n\n{elenco}{altri}")
+            elif popup_fine:
+                cartelle = self._cartelle_da_esito([e.esito for e in esiti])
                 self.root.after(0, self._conferma_completato_da_nastro, descrizione, cartelle)
 
         self._run_inprocess(task)
