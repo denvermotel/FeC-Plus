@@ -4873,8 +4873,6 @@ class FecGui:
         self._util_tab = tab  # riferimento per «Usa in...» dalla scheda Deleghe
         f = self._lf(tab)
 
-        self.util_cfcl = tk.StringVar()
-        self.util_piva = tk.StringVar()
         self.util_tipo = tk.StringVar(value="Fatture Emesse")
         self.util_dal = tk.StringVar()
         self.util_al = tk.StringVar()
@@ -4910,11 +4908,7 @@ class FecGui:
             "write", lambda *_: self._salva_preferenza("corr_da_modalita",
                                                        self.util_da_modalita.get()))
 
-        r += 1; self._row(f, r, "CF Cliente:", self.util_cfcl)
-        r += 1
-        self._util_piva_lbl = ttk.Label(f, text="P.IVA (opzionale):")
-        self._util_piva_lbl.grid(row=r, column=0, sticky="w", pady=4, padx=(0, 8))
-        ttk.Entry(f, textvariable=self.util_piva, width=22).grid(row=r, column=1, sticky="w")
+        r += 1; self.util_sel = self._selettore(f, r)
         r += 1; r = self._build_date_range(f, r, self.util_dal, self.util_al,
                                            "%d%m%Y", period_var=self.util_period) - 1
 
@@ -4946,8 +4940,8 @@ class FecGui:
 
         def _toggle_piva_label(*_):
             corr = self.util_tipo.get() == "Corrispettivi"
-            self._util_piva_lbl.configure(
-                text="P.IVA (se vuota, quella attiva):" if corr else "P.IVA (opzionale):")
+            self.util_sel.etichetta_piva_var.set(
+                "P.IVA (se vuota, quella attiva):" if corr else "P.IVA (opzionale):")
             if corr:
                 self._util_da_lbl.grid()
                 self._util_da_frame.grid()
@@ -5024,8 +5018,9 @@ class FecGui:
     def _run_utility(self):
         """Dispatch unico del pulsante «Scarica Elenco Excel» in base al «Tipo elenco»."""
         cf, pin, pwd, cfst = self._get_creds()
-        cfcl = self.util_cfcl.get().strip()
-        piva = self.util_piva.get().strip()
+        soggetti = self.util_sel.soggetti()
+        if soggetti is None:
+            return
         dal = self.util_dal.get().strip()
         al = self.util_al.get().strip()
         tipo_ui = self.util_tipo.get()
@@ -5034,7 +5029,6 @@ class FecGui:
         formato_csv = self.util_formato.get() == "csv"
 
         campi = dict(CF=cf, PIN=pin, Password=pwd, **{"CF Studio": cfst},
-                    **{"CF Cliente": cfcl},
                     **{"Data inizio": dal}, **{"Data fine": al})
         # P.IVA non obbligatoria in GUI: se vuota, i corrispettivi la ricavano da
         # sé (P.IVA dell'utenza di lavoro attiva, `res.piva`, come già fa
@@ -5060,8 +5054,10 @@ class FecGui:
         modalita_da = self.util_da_modalita.get()
         modalita_accesso = self.modalita.get()
 
-        def op(res, log, fq, ctrl, prog):
+        def op(res, s, log, fq, ctrl, prog):
+            import fec_directory
             import fec_utility
+            cfcl, piva = s.cf, s.piva
             piva_eff = piva
             if corrispettivi and not piva_eff:
                 piva_eff = (getattr(res, "piva", "") or "").strip()
@@ -5074,7 +5070,6 @@ class FecGui:
             chiuso = "interrotta"
             try:
                 for sd, sa in self._util_sotto_periodi(dal, al, gran, log):
-                    import fec_directory
                     dest = self._destinazione(
                         config, "elenco_corrispettivi" if corrispettivi else "elenchi", res,
                         cfcl, piva_eff if corrispettivi else piva, cf, log,
@@ -5108,14 +5103,15 @@ class FecGui:
             if avvisi:
                 testo = "\n".join(avvisi[:15]) + ("\n..." if len(avvisi) > 15 else "")
                 titolo = "Corrispettivi: elenchi incompleti"
-                corpo = ("Il portale ha restituito elenchi incompleti anche "
-                         f"frazionando il periodo:\n\n{testo}")
+                corpo = (f"Il portale ha restituito elenchi incompleti per {s.nome or s.cf} "
+                         f"anche frazionando il periodo:\n\n{testo}")
                 self.root.after(0, lambda: messagebox.showwarning(
                     titolo, corpo, parent=self.root))
             return radici or percorsi
 
-        self._esegui_in_process(cfcl, piva, _profilo_da_modalita(self.modalita.get()),
-            f"Elenco {'CSV' if formato_csv else 'Excel'} {tipo_ui}", op)
+        self._esegui_per_soggetti(soggetti, _profilo_da_modalita(self.modalita.get()),
+            f"Elenco {'CSV' if formato_csv else 'Excel'} {tipo_ui}", op, len(soggetti),
+            conta_soggetti=True)
 
     def _util_gran(self) -> str:
         """Granularità file Excel: vale solo se il periodo scelto è «Anno intero»
@@ -5138,8 +5134,14 @@ class FecGui:
         """Debug: salva nella cartella file di debug la lista JSON del periodo e il
         dettaglio della prima fattura (per confermare i nomi campo del parser)."""
         cf, pin, pwd, cfst = self._get_creds()
-        cfcl = self.util_cfcl.get().strip()
-        piva = self.util_piva.get().strip()
+        soggetti = self.util_sel.soggetti()
+        if soggetti is None:
+            return
+        if len(soggetti) > 1:
+            messagebox.showwarning("Dump JSON", "Il dump lavora su un solo soggetto alla "
+                                                "volta: lasciane scelto uno.")
+            return
+        cfcl, piva = soggetti[0].cf, soggetti[0].piva
         dal = self.util_dal.get().strip()
         al = self.util_al.get().strip()
         tipo = self._UTILITY_TIPI.get(self.util_tipo.get(), "emesse")
