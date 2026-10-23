@@ -4232,9 +4232,7 @@ class FecGui:
         f = self._lf(tab)
 
         self.mass_tipo    = tk.StringVar(value="Ft. Emesse")
-        self.mass_cfcl    = tk.StringVar()
-        self.mass_piva    = tk.StringVar()
-        self.mass_dal     = tk.StringVar()
+        self.mass_dal    = tk.StringVar()
         self.mass_al      = tk.StringVar()
 
         r = 0
@@ -4246,8 +4244,7 @@ class FecGui:
             "Corrispettivi",
         ])
         self._mass_tipo_cb.bind("<<ComboboxSelected>>", self._mass_tipo_selezionato)
-        r += 1; self._row(f, r, "CF Cliente:", self.mass_cfcl)
-        r += 1; self._row(f, r, "P.IVA Cliente (opzionale):", self.mass_piva)
+        r += 1; self.mass_sel = self._selettore(f, r)
         r += 1; r = self._build_date_range(f, r, self.mass_dal, self.mass_al, "%Y-%m-%d") - 1
         r += 1; self._note(f, r, "Genera e carica un file XML su /cons/mass-services/ dell'AdE "
                                  "(date nel formato AAAA-MM-GG). Comprende anche il tipo «Messe a "
@@ -4287,14 +4284,14 @@ class FecGui:
 
     def _run_richiesta_massiva(self):
         cf, pin, pwd, cfst = self._get_creds()
-        cfcl = self.mass_cfcl.get().strip()
-        piva = self.mass_piva.get().strip()
+        soggetti = self.mass_sel.soggetti()
+        if soggetti is None:
+            return
         dal  = self.mass_dal.get().strip()
         al   = self.mass_al.get().strip()
         tipo = self.mass_tipo.get()
 
         if not self._validate(CF=cf, PIN=pin, Password=pwd, **{"CF Studio": cfst},
-                              **{"CF Cliente": cfcl},
                               **{"Data inizio": dal}, **{"Data fine": al}):
             return
 
@@ -4303,7 +4300,8 @@ class FecGui:
         modalita_accesso = self.modalita.get()
         chiave_cartella = "massive_corrispettivi" if classe == "corrispettivi" else "massive"
 
-        def op(res, log, fq, ctrl, prog):
+        def op(res, s, log, fq, ctrl, prog):
+            cfcl, piva = s.cf, s.piva
             # P.IVA non obbligatoria: se vuota, si deduce dall'utenza di lavoro
             # attiva (res.piva, già risolta al login) o, in subordine, dalla
             # P.IVA salvata in anagrafica deleghe per lo stesso CF cliente.
@@ -4339,8 +4337,8 @@ class FecGui:
                                        modalita_accesso, chiuso=chiuso)
             return [dest.radice]
 
-        self._esegui_in_process(cfcl, piva, _profilo_da_modalita(self.modalita.get()),
-            f"Richiesta Massiva {tipo}", op)
+        self._esegui_per_soggetti(soggetti, _profilo_da_modalita(self.modalita.get()),
+            f"Richiesta Massiva {tipo}", op, len(soggetti), conta_soggetti=True)
 
     @staticmethod
     def _registra_richieste_massive(codici, tipo_richiesta, cfcl, piva, dal, al, log):
@@ -4457,22 +4455,27 @@ class FecGui:
         return righe
 
     def _run_controlla_risultati_massivi(self):
-        """Elenca i risultati disponibili sul portale per il CF/P.IVA indicati nella
-        tab (utenza corrente)."""
+        """Elenca i risultati disponibili sul portale per i soggetti scelti nella tab, o per
+        l'utenza di accesso se non ne è scelto nessuno. Un solo popup per tutti."""
         cf, pin, pwd, cfst = self._get_creds()
-        cfcl = self.mass_cfcl.get().strip()
-        piva = self.mass_piva.get().strip()
-
         if not self._validate(CF=cf, PIN=pin, Password=pwd, **{"CF Studio": cfst}):
             return
+        soggetti = self.mass_sel.soggetti(obbligatorio=False)
+        if soggetti is None:
+            return
+        righe = []
 
-        def op(res, log, fq, ctrl, prog):
-            righe = self._costruisci_righe_risultati(res, log, cf_default=cfcl, piva_default=piva)
-            log(f"\n{len(righe)} risultati trovati sul portale.")
-            self.root.after(0, self._mostra_popup_risultati_massivi, righe)
+        def op(res, s, log, fq, ctrl, prog):
+            trovate = self._costruisci_righe_risultati(res, log, cf_default=s.cf,
+                                                       piva_default=s.piva)
+            log(f"\n{len(trovate)} risultati trovati sul portale.")
+            righe.extend(trovate)
 
-        self._esegui_in_process(cfcl, piva, _profilo_da_modalita(self.modalita.get()),
-            "Controlla risultati Richieste Massive", op)
+        self._esegui_per_soggetti(
+            soggetti, _profilo_da_modalita(self.modalita.get()),
+            "Controlla risultati Richieste Massive", op, len(soggetti),
+            fine=lambda _esiti: self.root.after(0, self._mostra_popup_risultati_massivi, righe),
+            conta_soggetti=True)
 
     def _run_tutte_richieste_salvate(self):
         """Elenca i risultati per TUTTE le richieste ricordate in
