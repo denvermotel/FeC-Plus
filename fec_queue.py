@@ -15,6 +15,8 @@ di download (fec_download.py, che resta libreria pura). Fornisce:
 - `esegui_task(creds, richiesta)`: facade unica che autentica ed esegue la
   richiesta in un solo passo, punto d'ingresso comune ai frontend (GUI desktop,
   CLI, eventuale server web).
+- `esegui_per_soggetti(soggetti, accedi, operazione)`: la coda a due livelli, un
+  giro di richieste per ciascun soggetto con un solo login.
 
 Nessuno stato globale mutabile: ogni chiamata lavora sul proprio `AuthResult`/
 sessione, requisito per un eventuale server multi-utente.
@@ -308,3 +310,89 @@ def esegui_task(creds, richiesta: Richiesta, *, backend: str = "requests",
     auth = ade_auth.autentica(creds, backend=backend, headless=headless, log=log)
     return esegui_richiesta(auth, richiesta.tipo, dal=richiesta.dal, al=richiesta.al,
                             log=log, **_kwargs_richiesta(richiesta))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Coda per soggetti: un ciclo di richieste per ciascun soggetto, un solo login
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class EsitoSoggetto:
+    """Esito di un soggetto della coda. `esito` è ciò che ha restituito l'operazione;
+    `fase` dice dove si è fermato ("accesso" o "operazione"), vuota se è andato a buon fine;
+    `imprevisto` segnala un'eccezione diversa da DownloadError."""
+    soggetto: object
+    esito: object = None
+    fase: str = ""
+    step: str = ""
+    errore: str = ""
+    imprevisto: bool = False
+
+    @property
+    def ok(self) -> bool:
+        return not self.fase
+
+
+class ProgressoPrefissato:
+    """Inoltra tutto a `progresso`, ma anteponendo il soggetto all'etichetta di fase, così la
+    barra dice di chi è il blocco in corso. Non eredita da `fec_download.Progresso`: la
+    libreria non fa `isinstance`, le basta un oggetto con gli stessi metodi."""
+
+    def __init__(self, progresso, prefisso: str):
+        self._progresso = progresso
+        self._prefisso = prefisso
+
+    def fase(self, etichetta, indice, totale_fasi):
+        self._progresso.fase(f"{self._prefisso} · {etichetta}", indice, totale_fasi)
+
+    def __getattr__(self, nome):
+        return getattr(self._progresso, nome)
+
+
+def esegui_per_soggetti(soggetti, accedi, operazione, *, control=None,
+                        log=print) -> list[EsitoSoggetto]:
+    """
+    Coda a due livelli: per ogni soggetto `accedi(soggetto, auth_precedente)` ottiene l'AuthResult
+    (il primo fa il login, i successivi cambiano solo utenza) ed `operazione(auth, soggetto)`
+    esegue il lavoro di sempre, cioè `esegui_richiesta` coi suoi blocchi di periodo.
+
+    Un soggetto che fallisce (accesso, operazione, errore imprevisto) non ferma gli altri.
+    Se nessuna sessione è ancora valida e l'accesso fallisce prima della scelta utenza
+    (credenziali, rete), gli altri vengono segnati come falliti senza riprovare: ripetere
+    un login sbagliato rischia il blocco dell'utenza AdE. Se fallisce solo la scelta utenza
+    (step "utenza"), il soggetto successivo rifà il login.
+    L'interruzione dell'utente (`DownloadAnnullato`) invece ferma tutta la coda.
+    """
+    from ade_auth import AuthError
+    esiti: list[EsitoSoggetto] = []
+    auth = None
+    totale = len(soggetti)
+    for i, s in enumerate(soggetti, 1):
+        if control is not None:
+            control.check()
+        chi = s.nome or s.cf or "l'utenza di accesso"
+        if totale > 1:
+            log(f"\n[{i}/{totale}] {chi} ({s.cf})")
+        try:
+            auth = accedi(s, auth)
+        except AuthError as exc:
+            log(f"❌ Accesso non riuscito per {chi}: [{exc.step}] {exc.dettaglio}")
+            if auth is None and exc.step != "utenza":
+                for resto in soggetti[i - 1:]:
+                    esiti.append(EsitoSoggetto(resto, fase="accesso", step=exc.step,
+                                               errore=exc.dettaglio))
+                break
+            esiti.append(EsitoSoggetto(s, fase="accesso", step=exc.step, errore=exc.dettaglio))
+            continue
+        try:
+            esiti.append(EsitoSoggetto(s, esito=operazione(auth, s)))
+        except fd.DownloadAnnullato:
+            raise
+        except DownloadError as exc:
+            log(f"❌ Operazione non riuscita per {chi}: {exc}")
+            esiti.append(EsitoSoggetto(s, fase="operazione", errore=str(exc)))
+        except Exception as exc:  # noqa: BLE001 - un soggetto non deve fermare gli altri
+            log(f"❌ Errore imprevisto per {chi}: {exc!r}")
+            esiti.append(EsitoSoggetto(s, fase="operazione", imprevisto=True,
+                                       errore=str(exc) or exc.__class__.__name__))
+    return esiti
