@@ -14,6 +14,7 @@ import subprocess
 import threading
 import webbrowser
 import os
+import uuid
 import json
 import sys
 
@@ -563,7 +564,7 @@ class FecGui:
             modalita=self.cartelle_modalita.get(),
             anno=bool(self.cartelle_anno.get()),
             sessione=fec_directory.timestamp_sessione(datetime.now()),
-            personalizzate=personalizzate)
+            personalizzate=personalizzate, lancio=uuid.uuid4().hex[:8])
 
     def _destinazione(self, config, chiave, res, cf_cliente, piva, cf_utente, log, *,
                       anno_periodo=None, per_documento=False):
@@ -581,6 +582,20 @@ class FecGui:
         return fec_directory.risolvi(config, chiave, identificativo or "senza identificativo",
                                      denominazione, anno_periodo,
                                      per_documento=per_documento, log=log)
+
+    def _scrivi_riepilogo(self, config, dests, log, periodo, tipi, modalita_accesso,
+                          esiti=(), chiuso="completata"):
+        """`sessione.txt` nelle cartelle di lancio (solo modalità sessione). Un errore
+        di scrittura va nel log e non deve nascondere l'esito del lavoro."""
+        import fec_directory
+        try:
+            scritti = fec_directory.scrivi_sessioni(
+                dests, fec_directory.info_sessione(periodo, tipi, modalita_accesso, __version__,
+                                                   config.lancio, esiti, chiuso))
+            for percorso in scritti:
+                log(f"Riepilogo della sessione in {percorso}")
+        except OSError as exc:
+            log(f"⚠️  Riepilogo della sessione non scritto: {exc}")
 
     def _materiale_dir_path(self) -> str:
         """Cartella dei file di debug (HAR/dump/log), solo modalità dev: la
@@ -4001,59 +4016,54 @@ class FecGui:
         includi_trans = bool(self.std_includi_trans.get())
         includi_disposizione = bool(self.std_includi_disposizione.get())
 
-        def _scarica(res, log, fq, ctrl, prog, tipo_richiesta, **extra):
-            dest = self._destinazione(config, tipo_richiesta, res, cfcl, piva, cf, log,
-                                      per_documento=True)
-            esito = fq.esegui_richiesta(res, tipo_richiesta, dal=dal, al=al, cf_cliente=cfcl,
-                                        dest_dir=dest.cartella, sottocartella=False,
-                                        per_anno=dest.per_anno, control=ctrl, log=log,
-                                        progresso=prog, escludi_scartate_pa=escludi_scartate,
-                                        estrai_p7m=estrai_p7m, csv_ade=csv_ade, **extra)
-            return esito, dest
+        def _con_riepilogo(corpo):
+            """Esegue `corpo` raccogliendo destinazioni ed esiti; `sessione.txt` si
+            scrive comunque, anche se il lavoro si interrompe a metà."""
+            def op(res, log, fq, ctrl, prog):
+                dests, esiti, tipi = [], [], []
 
-        def _chiudi(esiti_dest, log):
-            """Ultimi passi comuni: `sessione.txt` in modalità sessione, poi la
-            cartella da aprire nel popup (quella del soggetto o del lancio)."""
-            radice = esiti_dest[0][1].radice
-            if config.modalita == "sessione":
-                esiti = [e for e, _ in esiti_dest]
-                fec_directory.scrivi_sessione(radice, {
-                    "Periodo": f"{dal} - {al}",
-                    "Tipi": ", ".join(fq_etichetta(e) for e in esiti),
-                    "Modalità di accesso": modalita_accesso,
-                    "Fatture scaricate": sum(e.fatture for e in esiti),
-                    "Metadati scaricati": sum(e.metadati for e in esiti),
-                    "Saltate": sum(e.saltati for e in esiti),
-                    "Errori": sum(e.errori for e in esiti),
-                    "Non ancora disponibili": sum(e.in_attesa for e in esiti),
-                    "Versione": __version__,
-                })
-                log(f"Riepilogo della sessione in {os.path.join(radice, 'sessione.txt')}")
-            return [radice]
+                def _scarica(tipo_richiesta, **extra):
+                    dest = self._destinazione(config, tipo_richiesta, res, cfcl, piva, cf, log,
+                                              per_documento=True)
+                    dests.append(dest)
+                    tipi.append(tipo_richiesta)
+                    esito = fq.esegui_richiesta(
+                        res, tipo_richiesta, dal=dal, al=al, cf_cliente=cfcl,
+                        dest_dir=dest.cartella, sottocartella=False, per_anno=dest.per_anno,
+                        control=ctrl, log=log, progresso=prog,
+                        escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m,
+                        csv_ade=csv_ade, **extra)
+                    esiti.append(esito)
+                    return esito
 
-        def fq_etichetta(esito):
-            return os.path.basename(esito.cartella.rstrip("\\/"))
+                chiuso = "interrotta"
+                try:
+                    corpo(_scarica, log)
+                    chiuso = "completata"
+                finally:
+                    self._scrivi_riepilogo(config, dests, log, f"{dal} - {al}", tipi,
+                                           modalita_accesso, esiti, chiuso)
+                return fec_directory.radici(dests)
+            return op
 
         filtri = {"filtro_piva": filtro_piva, "filtro_cf": filtro_cf}
 
-        def _op_emesse(res, log, fq, ctrl, prog):
-            esiti = [_scarica(res, log, fq, ctrl, prog, "emesse", **filtri)]
+        @_con_riepilogo
+        def _op_emesse(scarica, log):
+            primo = scarica("emesse", **filtri)
             if includi_trans:
                 log("\n↪  Aggiungo in coda: Transfrontaliere Emesse (stesso periodo)...")
-                esiti.append(_scarica(res, log, fq, ctrl, prog, "trans_emesse",
-                                      escludi_id_invio=esiti[0][0].id_invio_elenco, **filtri))
-            return _chiudi(esiti, log)
+                scarica("trans_emesse", escludi_id_invio=primo.id_invio_elenco, **filtri)
 
-        def _op_ricevute(res, log, fq, ctrl, prog):
-            esiti = [_scarica(res, log, fq, ctrl, prog, "ricevute", tipo_data=tipdata, **filtri)]
+        @_con_riepilogo
+        def _op_ricevute(scarica, log):
+            scarica("ricevute", tipo_data=tipdata, **filtri)
             if includi_disposizione:
                 log("\n↪  Aggiungo in coda: Messe a Disposizione (stesso periodo)...")
-                esiti.append(_scarica(res, log, fq, ctrl, prog, "messe_disposizione"))
-            return _chiudi(esiti, log)
+                scarica("messe_disposizione")
 
         def _op_singolo(tipo_richiesta, **extra):
-            return lambda res, log, fq, ctrl, prog: _chiudi(
-                [_scarica(res, log, fq, ctrl, prog, tipo_richiesta, **extra)], log)
+            return _con_riepilogo(lambda scarica, log: scarica(tipo_richiesta, **extra))
 
         OPS = {
             "Fatture Emesse": _op_emesse,
@@ -4165,6 +4175,7 @@ class FecGui:
 
         classe, chiave_richiesta = self._RICHIESTA_MASSIVA_OPS[tipo]
         config = self._config_cartelle()
+        modalita_accesso = self.modalita.get()
         chiave_cartella = "massive_corrispettivi" if classe == "corrispettivi" else "massive"
 
         def op(res, log, fq, ctrl, prog):
@@ -4189,10 +4200,18 @@ class FecGui:
                     "P.IVA non indicata e non deducibile (non presente nell'utenza attiva "
                     "né in anagrafica deleghe): indicala manualmente.")
             dest = self._destinazione(config, chiave_cartella, res, cfcl, piva_eff, cf, log)
-            codici = fq.esegui_richiesta(res, chiave_richiesta, dal=dal, al=al, cf_cliente=cfcl,
-                                         piva=piva_eff, dest_dir=dest.cartella,
-                                         sottocartella=False, control=ctrl, log=log)
-            self._registra_richieste_massive(codici, chiave_richiesta, cfcl, piva_eff, dal, al, log)
+            chiuso = "interrotta"
+            try:
+                codici = fq.esegui_richiesta(res, chiave_richiesta, dal=dal, al=al,
+                                             cf_cliente=cfcl, piva=piva_eff,
+                                             dest_dir=dest.cartella, sottocartella=False,
+                                             control=ctrl, log=log)
+                self._registra_richieste_massive(codici, chiave_richiesta, cfcl, piva_eff,
+                                                 dal, al, log)
+                chiuso = "completata"
+            finally:
+                self._scrivi_riepilogo(config, [dest], log, f"{dal} - {al}", [chiave_richiesta],
+                                       modalita_accesso, chiuso=chiuso)
             return [dest.radice]
 
         self._esegui_in_process(cfcl, piva, _profilo_da_modalita(self.modalita.get()),
@@ -4468,6 +4487,7 @@ class FecGui:
         headless = bool(self.headless_var.get())
         estrai_zip = bool(self.estrai_zip_risultati_massivi.get())
         config = self._config_cartelle()
+        modalita_accesso = self.modalita.get()
 
         gruppi = {}
         for r in selezionate:
@@ -4486,6 +4506,15 @@ class FecGui:
         progresso = self.progresso
 
         def task(log):
+            dests = []
+            stato = ["interrotta"]
+            try:
+                _lavoro(log, dests, stato)
+            finally:
+                self._scrivi_riepilogo(config, dests, log, "-", ["risultati massive"],
+                                       modalita_accesso, chiuso=stato[0])
+
+        def _lavoro(log, dests, stato):
             from ade_auth import autentica, seleziona_utenza, Creds, AuthError
             import fec_download
             import fec_richieste_massive
@@ -4521,6 +4550,7 @@ class FecGui:
                             config, classe, auth, cfcl, piva, cf, log,
                             anno_periodo=fec_directory.anno_da_data(r.get("dal")))
                         destdir, sotto = dest.cartella, False
+                        dests.append(dest)
                         log(f"\n[{r['etichetta']}] id {r['id_richiesta']}...")
                         try:
                             salvati = fec_download.scarica_risposta_massiva(
@@ -4543,6 +4573,7 @@ class FecGui:
                 self.root.after(0, self._mostra_popup_dopo_download, risultati)
                 return
             log("\n[Completato]")
+            stato[0] = "completata"
             progresso.conclusa()
             if not risultati and falliti > 0:
                 # Tutto fallito: il popup delle azioni facoltative uscirebbe subito
@@ -4674,6 +4705,7 @@ class FecGui:
         trim = "" if trim_ui == "Tutto l'anno" else trim_ui
         anno = self.bolli_anno.get().strip()
         config = self._config_cartelle()
+        modalita_accesso = self.modalita.get()
 
         if not self._validate(CF=cf, PIN=pin, Password=pwd, **{"CF Studio": cfst},
                               **{"CF Cliente": cfcl},
@@ -4683,9 +4715,15 @@ class FecGui:
         def op(res, log, fq, ctrl, prog):
             dest = self._destinazione(config, "bolli", res, cfcl, piva, cf, log,
                                       anno_periodo=anno or None)
-            fq.esegui_richiesta(res, "bolli", cf_cliente=cfcl, piva=piva, trimestre=trim,
-                                anno=anno, dest_dir=dest.cartella, sottocartella=False,
-                                control=ctrl, log=log)
+            chiuso = "interrotta"
+            try:
+                fq.esegui_richiesta(res, "bolli", cf_cliente=cfcl, piva=piva, trimestre=trim,
+                                    anno=anno, dest_dir=dest.cartella, sottocartella=False,
+                                    control=ctrl, log=log)
+                chiuso = "completata"
+            finally:
+                self._scrivi_riepilogo(config, [dest], log, f"{trim_ui} {anno}", ["bolli"],
+                                       modalita_accesso, chiuso=chiuso)
             return [dest.radice]
 
         self._esegui_in_process(cfcl, piva, _profilo_da_modalita(self.modalita.get()),
@@ -4897,6 +4935,7 @@ class FecGui:
 
         gran = self._util_gran()
         modalita_da = self.util_da_modalita.get()
+        modalita_accesso = self.modalita.get()
 
         def op(res, log, fq, ctrl, prog):
             import fec_utility
@@ -4908,33 +4947,41 @@ class FecGui:
             percorsi = []
             avvisi = []
             radici: list[str] = []
-            for sd, sa in self._util_sotto_periodi(dal, al, gran, log):
-                import fec_directory
-                dest = self._destinazione(
-                    config, "elenco_corrispettivi" if corrispettivi else "elenchi", res,
-                    cfcl, piva_eff if corrispettivi else piva, cf, log,
-                    anno_periodo=fec_directory.anno_da_data(sd))
-                destdir, sotto = dest.cartella, False
-                if dest.radice not in radici:
-                    radici.append(dest.radice)
-                try:
-                    if corrispettivi:
-                        import fec_corrispettivi
-                        esito_corr = fec_corrispettivi.elenco_corrispettivi_excel(
-                            res, cfcl, piva_eff, sd, sa,
-                            dest_dir=destdir, sottocartella=sotto, control=ctrl, log=log,
-                            modalita_da=modalita_da)
-                        percorsi.extend(esito_corr.percorsi)
-                        avvisi.extend(esito_corr.avvisi)
-                    else:
-                        tipo = self._UTILITY_TIPI.get(tipo_ui, "emesse")
-                        genera = (fec_utility.elenco_fatture_csv_ade if formato_csv
-                                  else fec_utility.elenco_fatture_excel)
-                        percorsi.append(genera(
-                            res, cfcl, piva, tipo, sd, sa,
-                            dest_dir=destdir, sottocartella=sotto, control=ctrl, log=log))
-                except fec_utility.NessunDato as exc:
-                    log(f"   (periodo saltato: {exc})")
+            dests = []
+            chiuso = "interrotta"
+            try:
+                for sd, sa in self._util_sotto_periodi(dal, al, gran, log):
+                    import fec_directory
+                    dest = self._destinazione(
+                        config, "elenco_corrispettivi" if corrispettivi else "elenchi", res,
+                        cfcl, piva_eff if corrispettivi else piva, cf, log,
+                        anno_periodo=fec_directory.anno_da_data(sd))
+                    destdir, sotto = dest.cartella, False
+                    dests.append(dest)
+                    if dest.radice not in radici:
+                        radici.append(dest.radice)
+                    try:
+                        if corrispettivi:
+                            import fec_corrispettivi
+                            esito_corr = fec_corrispettivi.elenco_corrispettivi_excel(
+                                res, cfcl, piva_eff, sd, sa,
+                                dest_dir=destdir, sottocartella=sotto, control=ctrl, log=log,
+                                modalita_da=modalita_da)
+                            percorsi.extend(esito_corr.percorsi)
+                            avvisi.extend(esito_corr.avvisi)
+                        else:
+                            tipo = self._UTILITY_TIPI.get(tipo_ui, "emesse")
+                            genera = (fec_utility.elenco_fatture_csv_ade if formato_csv
+                                      else fec_utility.elenco_fatture_excel)
+                            percorsi.append(genera(
+                                res, cfcl, piva, tipo, sd, sa,
+                                dest_dir=destdir, sottocartella=sotto, control=ctrl, log=log))
+                    except fec_utility.NessunDato as exc:
+                        log(f"   (periodo saltato: {exc})")
+                chiuso = "completata"
+            finally:
+                self._scrivi_riepilogo(config, dests, log, f"{dal} - {al}", [tipo_ui],
+                                       modalita_accesso, chiuso=chiuso)
             if avvisi:
                 testo = "\n".join(avvisi[:15]) + ("\n..." if len(avvisi) > 15 else "")
                 titolo = "Corrispettivi: elenchi incompleti"

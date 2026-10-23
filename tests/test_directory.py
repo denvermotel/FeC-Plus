@@ -129,7 +129,27 @@ class TestRisolvi(unittest.TestCase):
         d = self._r(config, "trans_emesse", per_documento=True)
         radice = os.path.join(self.ditta, "2026-09-24_1507")
         self.assertEqual(d, fc.Destinazione(os.path.join(radice, "Transfrontaliere emesse"),
-                                            False, radice))
+                                            False, radice, True))
+
+    def test_sessione_lanci_nello_stesso_minuto_in_cartelle_diverse(self):
+        def lancio(sigla):
+            return fc.ConfigCartelle(self.base, modalita="sessione",
+                                     sessione="2026-09-24_1507", lancio=sigla)
+        a = self._r(lancio("aaaa"), "emesse", per_documento=True)
+        b = self._r(lancio("bbbb"), "emesse", per_documento=True)
+        c = self._r(lancio("cccc"), "emesse", per_documento=True)
+        self.assertEqual(a.radice, os.path.join(self.ditta, "2026-09-24_1507"))
+        self.assertEqual(b.radice, os.path.join(self.ditta, "2026-09-24_1507_2"))
+        self.assertEqual(c.radice, os.path.join(self.ditta, "2026-09-24_1507_3"))
+
+    def test_sessione_stesso_lancio_riusa_la_sua_cartella(self):
+        config = fc.ConfigCartelle(self.base, modalita="sessione",
+                                   sessione="2026-09-24_1507", lancio="aaaa")
+        a = self._r(config, "emesse", per_documento=True)
+        b = self._r(config, "ricevute", per_documento=True)
+        self.assertEqual(a.radice, b.radice)
+        with open(os.path.join(a.radice, "sessione.txt"), encoding="utf-8") as fh:
+            self.assertEqual(fh.readline(), "Lancio: aaaa\n")
 
     def test_sessione_senza_timestamp_e_un_errore(self):
         with self.assertRaises(ValueError):
@@ -179,6 +199,12 @@ class TestSoggetto(unittest.TestCase):
         self.assertEqual(fc.soggetto("", "", "01234567890", "CFCLIENTE", "CFUT", deleghe),
                          ("01234567890", "BIANCHI SAS"))
 
+    def test_piva_presa_dalle_deleghe_per_lo_stesso_cf(self):
+        deleghe = [{"codice_fiscale": "cfcliente", "partita_iva": "01234567890",
+                    "denominazione": "BIANCHI SAS"}]
+        self.assertEqual(fc.soggetto("", "", "", "CFCLIENTE", "CFUT", deleghe),
+                         ("01234567890", "BIANCHI SAS"))
+
     def test_solo_cf(self):
         self.assertEqual(fc.soggetto("", "", "", "cfcliente", "CFUT", []), ("CFCLIENTE", ""))
         self.assertEqual(fc.soggetto("", "", "", "", "cfut", []), ("CFUT", ""))
@@ -196,6 +222,39 @@ class TestTesti(unittest.TestCase):
         self.assertEqual(percorso, os.path.join(self.tmp, "sessione.txt"))
         with open(percorso, encoding="utf-8") as fh:
             self.assertEqual(fh.read(), "Periodo: 01072026 - 31072026\nFatture scaricate: 3\n")
+
+    def test_scrivi_sessioni_salta_le_cartelle_fisse(self):
+        lancio = os.path.join(self.tmp, "lancio")
+        fissa = os.path.join(self.tmp, "gestionale")
+        os.makedirs(fissa)
+        dest = [fc.Destinazione(os.path.join(lancio, "Fatture emesse"), False, lancio, True),
+                fc.Destinazione(os.path.join(lancio, "Elenchi"), False, lancio, True),
+                fc.Destinazione(fissa, False, fissa),
+                None]
+        scritti = fc.scrivi_sessioni(dest, {"Lancio": "x"})
+        self.assertEqual(scritti, [os.path.join(lancio, "sessione.txt")])
+        self.assertFalse(os.path.exists(os.path.join(fissa, "sessione.txt")))
+        self.assertEqual(fc.radici(dest), [lancio, fissa])
+
+    def test_info_sessione_senza_esiti(self):
+        info = fc.info_sessione("01072026 - 31072026", ["emesse", "bolli"], "Delega diretta",
+                                "0.04", "aaaa", esito="interrotta")
+        self.assertEqual(list(info)[0], "Lancio")
+        self.assertEqual(info["Tipi"], "emesse, bolli")
+        self.assertEqual(info["Esito"], "interrotta")
+        self.assertNotIn("Fatture scaricate", info)
+
+    def test_info_sessione_con_esiti_di_download(self):
+        class Esito:
+            def __init__(self, **kw):
+                self.__dict__.update(kw)
+        esiti = [Esito(fatture=2, metadati=3, saltati=1, errori=0, in_attesa=1),
+                 Esito(fatture=1, metadati=1, saltati=0, errori=2, in_attesa=0)]
+        info = fc.info_sessione("p", ["emesse"], "SPID", "0.04", "aaaa", esiti=esiti)
+        self.assertEqual((info["Fatture scaricate"], info["Metadati scaricati"],
+                          info["Saltate"], info["Errori"], info["Non ancora disponibili"]),
+                         (3, 4, 1, 2, 1))
+        self.assertEqual(list(info)[-1], "Versione")
 
     def test_descrizione(self):
         self.assertIn("Fatture emesse", fc.descrizione(fc.ConfigCartelle("B"), "emesse"))

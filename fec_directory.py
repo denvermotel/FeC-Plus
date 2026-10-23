@@ -116,13 +116,39 @@ class ConfigCartelle:
     anno: bool = True                # sottocartella per anno, solo modalità ditta
     sessione: str = ""               # timestamp del lancio, solo modalità sessione
     personalizzate: dict = field(default_factory=dict)  # classe -> (path, senza_sotto)
+    # Identifica il lancio dentro sessione.txt: due lanci nello stesso minuto
+    # finiscono in cartelle diverse (`_2`, `_3`, ...) invece di mescolarsi.
+    lancio: str = ""
 
 
 @dataclass(frozen=True)
 class Destinazione:
-    cartella: str     # dove scrivere
-    per_anno: bool    # solo XML: sottocartella per anno della data documento
-    radice: str       # cartella da aprire a fine operazione
+    cartella: str           # dove scrivere
+    per_anno: bool          # solo XML: sottocartella per anno della data documento
+    radice: str             # cartella da aprire a fine operazione
+    sessione: bool = False  # la radice è la cartella di un lancio (riceve sessione.txt)
+
+
+NOME_RIEPILOGO = "sessione.txt"
+
+
+def _cartella_sessione(ditta: str, config: ConfigCartelle) -> str:
+    """Cartella del lancio: quella col timestamp, o `_2`, `_3`, ... se un altro
+    lancio dello stesso minuto l'ha già presa."""
+    if not config.lancio:
+        return os.path.join(ditta, config.sessione)
+    n = 1
+    while True:
+        nome = config.sessione if n == 1 else f"{config.sessione}_{n}"
+        radice = os.path.join(ditta, nome)
+        riepilogo = os.path.join(radice, NOME_RIEPILOGO)
+        if not os.path.exists(riepilogo):
+            scrivi_sessione(radice, {"Lancio": config.lancio})
+            return radice
+        with open(riepilogo, encoding="utf-8", errors="replace") as fh:
+            if f"Lancio: {config.lancio}\n" in fh.read():
+                return radice
+        n += 1
 
 
 def risolvi(config: ConfigCartelle, chiave: str, identificativo: str,
@@ -142,8 +168,10 @@ def risolvi(config: ConfigCartelle, chiave: str, identificativo: str,
     if config.modalita == "sessione":
         if not config.sessione:
             raise ValueError("Modalità sessione senza timestamp del lancio.")
-        radice = os.path.join(ditta, config.sessione)
+        radice = _cartella_sessione(ditta, config)
         cartella = os.path.join(radice, sottocartella)
+        os.makedirs(cartella, exist_ok=True)
+        return Destinazione(cartella, False, radice, True)
     else:
         radice = ditta
         cartella = os.path.join(ditta, sottocartella)
@@ -159,10 +187,18 @@ def risolvi(config: ConfigCartelle, chiave: str, identificativo: str,
 def soggetto(res_piva: str, res_denominazione: str, piva: str, cf_cliente: str,
              cf_utente: str, deleghe: list[dict]) -> tuple[str, str]:
     """(identificativo, denominazione) del soggetto per cui si scarica: P.IVA
-    dell'utenza o del form, altrimenti CF; denominazione dal login, altrimenti
-    dall'elenco deleghe locale."""
+    dell'utenza, del form o dell'elenco deleghe locale, altrimenti CF;
+    denominazione dal login, altrimenti dall'elenco deleghe."""
     p = (res_piva or "").strip() or (piva or "").strip()
     cf = (cf_cliente or "").strip().upper() or (cf_utente or "").strip().upper()
+    if not p and cf:
+        # senza P.IVA dal login lo stesso soggetto finirebbe in una seconda
+        # cartella intestata al CF
+        for riga in deleghe or []:
+            if str(riga.get("codice_fiscale", "")).strip().upper() == cf:
+                p = str(riga.get("partita_iva", "") or "").strip()
+                if p:
+                    break
     identificativo = p or cf
     denominazione = (res_denominazione or "").strip()
     if not denominazione:
@@ -194,8 +230,48 @@ def descrizione(config: ConfigCartelle, chiave: str) -> str:
 def scrivi_sessione(cartella: str, info: dict) -> str:
     """Scrive `sessione.txt` (una riga `Chiave: valore` per voce) e ne ritorna il percorso."""
     os.makedirs(cartella, exist_ok=True)
-    percorso = os.path.join(cartella, "sessione.txt")
+    percorso = os.path.join(cartella, NOME_RIEPILOGO)
     with open(percorso, "w", encoding="utf-8", newline="\n") as fh:
         for chiave, valore in info.items():
             fh.write(f"{chiave}: {valore}\n")
     return percorso
+
+
+def radici(destinazioni) -> list[str]:
+    """Cartelle da aprire a fine lavoro, senza doppioni e nell'ordine d'uso."""
+    viste: list[str] = []
+    for d in destinazioni:
+        if d is not None and d.radice not in viste:
+            viste.append(d.radice)
+    return viste
+
+
+def info_sessione(periodo: str, tipi, modalita_accesso: str, versione: str, lancio: str,
+                  esiti=(), esito: str = "completata") -> dict:
+    """Contenuto di sessione.txt. I conteggi compaiono solo se `esiti` contiene
+    risultati di download (oggetti con `fatture`, `metadati`, `saltati`, ...)."""
+    info = {"Lancio": lancio, "Periodo": periodo, "Tipi": ", ".join(tipi),
+            "Modalità di accesso": modalita_accesso, "Esito": esito}
+    scarichi = [e for e in esiti if hasattr(e, "fatture")]
+    if scarichi:
+        info["Fatture scaricate"] = sum(e.fatture for e in scarichi)
+        info["Metadati scaricati"] = sum(e.metadati for e in scarichi)
+        info["Saltate"] = sum(e.saltati for e in scarichi)
+        info["Errori"] = sum(e.errori for e in scarichi)
+        info["Non ancora disponibili"] = sum(e.in_attesa for e in scarichi)
+    info["Versione"] = versione
+    return info
+
+
+def scrivi_sessioni(destinazioni, info: dict) -> list[str]:
+    """Scrive sessione.txt nelle sole cartelle di lancio (mai in una cartella fissa
+    «senza sottocartella»). Ritorna i percorsi scritti."""
+    scritti: list[str] = []
+    for d in destinazioni:
+        if d is None or not d.sessione:
+            continue
+        percorso = os.path.join(d.radice, NOME_RIEPILOGO)
+        if percorso not in scritti:
+            scrivi_sessione(d.radice, info)
+            scritti.append(percorso)
+    return scritti

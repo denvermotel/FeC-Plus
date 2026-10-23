@@ -163,7 +163,7 @@ _CMD_TIPO = {
 }
 
 
-def _destinazione(args, auth, chiave, anno_periodo=None, per_documento=False):
+def _destinazione(args, auth, chiave, anno_periodo=None, per_documento=False, lancio=""):
     """Cartella di destinazione dopo il login (P.IVA e denominazione note)."""
     from datetime import datetime
     import fec_directory
@@ -175,7 +175,8 @@ def _destinazione(args, auth, chiave, anno_periodo=None, per_documento=False):
         deleghe = []
     config = fec_directory.ConfigCartelle(
         base=args.dest or fec_download.DEFAULT_DEST_DIR, modalita=args.cartelle,
-        anno=not args.no_anno, sessione=fec_directory.timestamp_sessione(datetime.now()))
+        anno=not args.no_anno, sessione=fec_directory.timestamp_sessione(datetime.now()),
+        lancio=lancio)
     identificativo, denominazione = fec_directory.soggetto(
         getattr(auth, "piva", ""), getattr(auth, "denominazione", ""),
         getattr(args, "piva", "") or "", getattr(args, "cf_cliente", "") or "",
@@ -184,17 +185,41 @@ def _destinazione(args, auth, chiave, anno_periodo=None, per_documento=False):
                                  denominazione, anno_periodo, per_documento=per_documento)
 
 
+def _riepilogo(args, dest, lancio, esito, chiuso):
+    """`sessione.txt` nella cartella di lancio (solo modalità sessione)."""
+    import fec_directory
+    periodo = (f"{args.dal} - {args.al}" if getattr(args, "dal", None)
+               else str(getattr(args, "anno", "") or "-"))
+    info = fec_directory.info_sessione(
+        periodo, [args.comando], args.backend, __version__, lancio,
+        [esito] if esito is not None else [], chiuso)
+    try:
+        for percorso in fec_directory.scrivi_sessioni([dest], info):
+            print(f"Riepilogo della sessione in {percorso}")
+    except OSError as exc:
+        print(f"Riepilogo della sessione non scritto: {exc}", file=sys.stderr)
+
+
 def _dispatch(args, auth, fq):
     """Instrada il comando a fec_queue.esegui_richiesta (spezzettamento periodi)."""
+    import uuid
+    lancio = uuid.uuid4().hex[:8]
     # Export CSV AdE autonomo: non passa da fec_queue (nessun download di file),
     # ma da fec_utility, che interroga solo le liste.
     if args.comando == "csv-fatture":
         import fec_directory
         import fec_utility
-        dest = _destinazione(args, auth, "elenchi", fec_directory.anno_da_data(args.dal))
-        return fec_utility.elenco_fatture_csv_ade(
-            auth, args.cf_cliente, args.piva, args.tipo, args.dal, args.al,
-            dest_dir=dest.cartella, sottocartella=False)
+        dest = _destinazione(args, auth, "elenchi", fec_directory.anno_da_data(args.dal),
+                             lancio=lancio)
+        chiuso = "interrotta"
+        try:
+            esito = fec_utility.elenco_fatture_csv_ade(
+                auth, args.cf_cliente, args.piva, args.tipo, args.dal, args.al,
+                dest_dir=dest.cartella, sottocartella=False)
+            chiuso = "completata"
+        finally:
+            _riepilogo(args, dest, lancio, None, chiuso)
+        return esito
 
     tipo = _CMD_TIPO.get(args.comando)
     if tipo is None:
@@ -204,7 +229,7 @@ def _dispatch(args, auth, fq):
     anno = (str(args.anno) if tipo == "bolli" and getattr(args, "anno", None)
             else fec_directory.anno_da_data(getattr(args, "dal", None)))
     dest = _destinazione(args, auth, fec_directory.TIPO_CHIAVE[tipo], anno,
-                         per_documento=spec.kind == "download")
+                         per_documento=spec.kind == "download", lancio=lancio)
     kw = {"cf_cliente": args.cf_cliente, "dest_dir": dest.cartella, "sottocartella": False}
     if tipo == "ricevute":
         kw["tipo_data"] = args.tipo_data
@@ -217,8 +242,14 @@ def _dispatch(args, auth, fq):
         kw["piva"] = args.piva
     if tipo == "bolli":
         kw.update(piva=args.piva, trimestre=args.trimestre, anno=args.anno)
-    return fq.esegui_richiesta(auth, tipo, dal=getattr(args, "dal", None),
-                               al=getattr(args, "al", None), **kw)
+    esito, chiuso = None, "interrotta"
+    try:
+        esito = fq.esegui_richiesta(auth, tipo, dal=getattr(args, "dal", None),
+                                    al=getattr(args, "al", None), **kw)
+        chiuso = "completata"
+    finally:
+        _riepilogo(args, dest, lancio, esito, chiuso)
+    return esito
 
 
 def _verifica_accesso(args) -> None:
