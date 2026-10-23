@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import fec_gui
 import fec_store
 from _protezione import DatiRealiProtetti
+from _appgui import distruggi_root
 
 
 def _tk_disponibile() -> bool:
@@ -40,7 +41,7 @@ class TestUtilityDistributori(unittest.TestCase):
         self.app = fec_gui.FecGui(self.root)
 
     def tearDown(self):
-        self.root.destroy()
+        distruggi_root(self.root)
         patch.stopall()
 
     def test_scelta_visibile_solo_coi_corrispettivi(self):

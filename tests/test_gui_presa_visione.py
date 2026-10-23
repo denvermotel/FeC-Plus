@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import fec_gui
 import fec_store
 from _protezione import DatiRealiProtetti
+from _appgui import distruggi_root
 
 
 def _tk_disponibile() -> bool:
@@ -40,7 +41,7 @@ class TestAvvisoPresaVisione(unittest.TestCase):
         self.app.avviso_presa_visione.set(True)
 
     def tearDown(self):
-        self.root.destroy()
+        distruggi_root(self.root)
         patch.stopall()
 
     def _avvisi_aperti(self):
@@ -56,7 +57,7 @@ class TestAvvisoPresaVisione(unittest.TestCase):
                               if isinstance(w, tk.Toplevel)
                               and "presa visione" in w.title().lower()], [])
         finally:
-            root.destroy()
+            distruggi_root(root)
 
     def test_disattivato_non_apre_nulla(self):
         self.app.avviso_presa_visione.set(False)

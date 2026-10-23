@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import fec_download
 import fec_gui
+from _appgui import distruggi_root
 
 
 def _tk_disponibile() -> bool:
@@ -44,7 +45,7 @@ class TestDelegheControllaCanaliNuovi(unittest.TestCase):
 
     def tearDown(self):
         self._patch_save.stop()
-        self.root.destroy()
+        distruggi_root(self.root)
 
     @patch("fec_anagrafica.recupera")
     @patch("ade_auth.seleziona_utenza")
@@ -117,7 +118,7 @@ class TestDelegheSincronizzaDaPortale(unittest.TestCase):
 
     def tearDown(self):
         self._patch_save.stop()
-        self.root.destroy()
+        distruggi_root(self.root)
 
     @patch("fec_gui.messagebox.askyesno", return_value=False)
     @patch("fec_deleghe_sync.sincronizza")

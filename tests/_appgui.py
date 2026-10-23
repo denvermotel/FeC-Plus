@@ -28,6 +28,28 @@ DELEGHE = [
 ]
 
 
+def annulla_after(root) -> None:
+    """Annulla a livello Tcl gli `after` pendenti: `after_cancel` cancellerebbe anche il
+    comando Python, che la destroy dei widget (DateEntry) poi tenta di rimuovere."""
+    try:
+        for i in root.tk.call("after", "info"):
+            root.tk.call("after", "cancel", i)
+    except tk.TclError:
+        pass
+
+
+def distruggi_root(root) -> None:
+    """Chiude la finestra senza lasciare `after` che scattano su comandi già rimossi (il
+    DateEntry ne accoda uno a ogni cambio tema, anche dopo la destroy)."""
+    try:
+        root.update_idletasks()
+    except tk.TclError:
+        pass
+    annulla_after(root)
+    root.destroy()
+    annulla_after(root)
+
+
 def tk_disponibile() -> bool:
     try:
         r = tk.Tk()
@@ -53,9 +75,9 @@ class AppGuiCase(unittest.TestCase):
         self.addCleanup(patch.stopall)
         self.root = tk.Tk()
         self.root.withdraw()
-        self.addCleanup(self.root.destroy)
+        self.addCleanup(distruggi_root, self.root)
         self.addCleanup(self._ferma_callback)
-        self.app =fec_gui.FecGui(self.root)
+        self.app = fec_gui.FecGui(self.root)
         self.base = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.base, True)
         self.app.std_destdir.set(self.base)
@@ -82,12 +104,11 @@ class AppGuiCase(unittest.TestCase):
             except Exception:  # noqa: BLE001 - pulizia best effort
                 pass
         try:
-            for i in self.root.tk.call("after", "info"):
-                # Annullo a livello Tcl: `after_cancel` cancellerebbe anche il comando
-                # Python, che la destroy dei widget (DateEntry) poi tenta di rimuovere.
-                self.root.tk.call("after", "cancel", i)
+            # Gli eventi inattivi (per esempio il cambio tema) accodano nuovi `after`.
+            self.root.update_idletasks()
         except tk.TclError:
             pass
+        annulla_after(self.root)
 
     def carica_deleghe(self):
         """Mette le deleghe di comodo nella finestra e nei selettori."""

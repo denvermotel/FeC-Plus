@@ -20,6 +20,7 @@ import fec_deleghe
 import fec_gui
 import fec_store
 from _protezione import DatiRealiProtetti
+from _appgui import distruggi_root
 
 
 def _tk_disponibile() -> bool:
@@ -42,7 +43,7 @@ class TestGuiCartelle(unittest.TestCase):
         self.addCleanup(patch.stopall)
         self.root = tk.Tk()
         self.root.withdraw()
-        self.addCleanup(self.root.destroy)
+        self.addCleanup(distruggi_root, self.root)
         self.app = fec_gui.FecGui(self.root)
         self.base = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.base, True)
