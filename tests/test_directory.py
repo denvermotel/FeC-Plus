@@ -42,6 +42,11 @@ class TestNomi(unittest.TestCase):
         self.assertIsNone(fc.anno_da_data(None))
         self.assertIsNone(fc.anno_da_data("boh"))
 
+    def test_anno_cartella(self):
+        self.assertEqual(fc.anno_cartella("2026-07-10"), "2026")
+        self.assertEqual(fc.anno_cartella(""), fc.SENZA_DATA)
+        self.assertEqual(fc.anno_cartella(None), fc.SENZA_DATA)
+
     def test_timestamp_sessione(self):
         self.assertEqual(fc.timestamp_sessione(datetime(2026, 9, 24, 15, 7)),
                          "2026-09-24_1507")

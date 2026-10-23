@@ -4645,6 +4645,7 @@ class FecGui:
         def _lavoro(log, dests, stato):
             from ade_auth import autentica, seleziona_utenza, Creds, AuthError
             import fec_download
+            import fec_directory
             import fec_richieste_massive
             log(f"\n{'─' * 60}\n▶  Scarico risultati Richieste Massive selezionati\n{'─' * 60}")
             auth = None
@@ -4673,10 +4674,9 @@ class FecGui:
                     for r in righe_gruppo:
                         control.check()
                         classe = "risultati_massive" if r["tipo_ade"] == "FATT" else "risultati_corrispettivi"
-                        import fec_directory
                         dest = self._destinazione(
                             config, classe, auth, cfcl, piva, cf, log,
-                            anno_periodo=fec_directory.anno_da_data(r.get("dal")))
+                            anno_periodo=fec_directory.anno_cartella(r.get("dal")))
                         destdir, sotto = dest.cartella, False
                         dests.append(dest)
                         log(f"\n[{r['etichetta']}] id {r['id_richiesta']}...")

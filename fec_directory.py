@@ -104,6 +104,11 @@ def anno_da_data(val) -> str | None:
     return None
 
 
+def anno_cartella(val) -> str:
+    """Sottocartella per anno di un documento: senza data riconoscibile, `senza data`."""
+    return anno_da_data(val) or SENZA_DATA
+
+
 def timestamp_sessione(quando: datetime) -> str:
     """Nome della cartella di un lancio: si ordina da solo, senza i «:» vietati."""
     return quando.strftime("%Y-%m-%d_%H%M")

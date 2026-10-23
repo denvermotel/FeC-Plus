@@ -540,8 +540,7 @@ def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
             cartella_file = dest_dir
             if per_anno:
                 cartella_file = os.path.join(
-                    dest_dir, fec_directory.anno_da_data(fattura.get("dataFattura"))
-                    or fec_directory.SENZA_DATA)
+                    dest_dir, fec_directory.anno_cartella(fattura.get("dataFattura")))
                 os.makedirs(cartella_file, exist_ok=True)
             log(f"Scarico {fname}  (tot. {n_fatture})")
             with open(os.path.join(cartella_file, fname), "wb") as f:
