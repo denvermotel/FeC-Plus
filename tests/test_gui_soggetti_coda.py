@@ -149,6 +149,25 @@ class TestEseguiPerSoggetti(AppGuiCase):
         self.assertEqual(self.errori, [])
         self.assertEqual(len(self.chiamate), 1)
 
+    def _con_anagrafica(self, soggetti):
+        self.app.deleghe_no_update_var.set(False)
+        righe = []
+        self.app._applica_aggiornamento_delega = lambda *a, **k: righe.append(a)
+        with patch("fec_anagrafica.recupera", return_value={}) as recupera:
+            self._esegui(soggetti)
+        return recupera, righe
+
+    def test_piu_soggetti_non_aggiorna_l_anagrafica(self):
+        recupera, righe = self._con_anagrafica([ROSSI, VERDI])
+        recupera.assert_not_called()
+        self.assertEqual(righe, [])
+        self.assertEqual(len(self.chiamate), 2)
+
+    def test_un_soggetto_aggiorna_l_anagrafica(self):
+        recupera, righe = self._con_anagrafica([ROSSI])
+        recupera.assert_called_once()
+        self.assertEqual(len(righe), 1)
+
     def test_firma_di_prima_ancora_valida(self):
         viste = []
         self.app._esegui_in_process(

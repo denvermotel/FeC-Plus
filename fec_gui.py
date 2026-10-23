@@ -1686,7 +1686,10 @@ class FecGui:
         progresso = self.progresso
         # Letti qui, sul thread Tk: il worker non deve toccare le variabili Tk.
         popup_fine = bool(self.popup_fine_task.get())
-        aggiorna_deleghe = not self.deleghe_no_update_var.get()
+        # I popup dell'anagrafica bloccherebbero la coda: con più soggetti non si aggiorna.
+        richiesto_aggiorna = not self.deleghe_no_update_var.get()
+        aggiorna_deleghe = richiesto_aggiorna and len(soggetti) <= 1
+        avvisa_anagrafica = richiesto_aggiorna and len(soggetti) > 1
         conta = conta_soggetti and len(soggetti) > 1
 
         def task(log):
@@ -1695,6 +1698,9 @@ class FecGui:
             import fec_queue
 
             log(f"\n{'─' * 60}\n▶  {descrizione} (in-process, backend: {backend})\n{'─' * 60}")
+            if avvisa_anagrafica:
+                log("Con più soggetti l'anagrafica delle deleghe non si aggiorna: spunta le "
+                    "deleghe nella tab Deleghe e usa «Aggiorna selezionate».")
 
             def accedi(s, precedente):
                 if conta:
@@ -3874,7 +3880,7 @@ class FecGui:
         f = self._lf(tab)
 
         self.std_tipo    = tk.StringVar(value="Fatture Emesse")
-        self.std_dal    = tk.StringVar()
+        self.std_dal     = tk.StringVar()
         self.std_al      = tk.StringVar()
         self.std_tipdata = tk.StringVar(value="1")
         self.std_filtro_controparte = tk.BooleanVar(value=False)
@@ -4232,7 +4238,7 @@ class FecGui:
         f = self._lf(tab)
 
         self.mass_tipo    = tk.StringVar(value="Ft. Emesse")
-        self.mass_dal    = tk.StringVar()
+        self.mass_dal     = tk.StringVar()
         self.mass_al      = tk.StringVar()
 
         r = 0
