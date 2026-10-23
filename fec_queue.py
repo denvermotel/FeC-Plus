@@ -272,6 +272,7 @@ class Richiesta:
     escludi_scartate_pa: bool = True
     estrai_p7m: bool = False
     csv_ade: bool = False
+    scarica_metadati: bool = True
 
 
 def _kwargs_richiesta(r: Richiesta) -> dict:
@@ -285,6 +286,7 @@ def _kwargs_richiesta(r: Richiesta) -> dict:
         kw["escludi_scartate_pa"] = r.escludi_scartate_pa
         kw["estrai_p7m"] = r.estrai_p7m
         kw["csv_ade"] = r.csv_ade
+        kw["scarica_metadati"] = r.scarica_metadati
     if spec is not None and spec.kind == "invio":
         kw["piva"] = r.piva
     if r.tipo == "bolli":
