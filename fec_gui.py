@@ -4798,14 +4798,11 @@ class FecGui:
         self._bolli_tab = tab  # riferimento per «Usa in...» dalla scheda Deleghe
         f = self._lf(tab)
 
-        self.bolli_cfcl = tk.StringVar()
-        self.bolli_piva = tk.StringVar()
         self.bolli_trim = tk.StringVar(value="1")
         self.bolli_anno = tk.StringVar()
 
         r = 0
-        self._row(f, r, "CF Cliente:", self.bolli_cfcl)
-        r += 1; self._row(f, r, "P.IVA (opzionale):", self.bolli_piva)
+        self.bolli_sel = self._selettore(f, r)
         r += 1; self._combo(f, r, "Trimestre:", self.bolli_trim,
                             ["1", "2", "3", "4", "Tutto l'anno"])
         r += 1
@@ -4824,8 +4821,9 @@ class FecGui:
 
     def _run_bolli(self):
         cf, pin, pwd, cfst = self._get_creds()
-        cfcl = self.bolli_cfcl.get().strip()
-        piva = self.bolli_piva.get().strip()
+        soggetti = self.bolli_sel.soggetti()
+        if soggetti is None:
+            return
         trim_ui = self.bolli_trim.get().strip()
         trim = "" if trim_ui == "Tutto l'anno" else trim_ui
         anno = self.bolli_anno.get().strip()
@@ -4833,11 +4831,11 @@ class FecGui:
         modalita_accesso = self.modalita.get()
 
         if not self._validate(CF=cf, PIN=pin, Password=pwd, **{"CF Studio": cfst},
-                              **{"CF Cliente": cfcl},
                               Trimestre=trim_ui, Anno=anno):
             return
 
-        def op(res, log, fq, ctrl, prog):
+        def op(res, s, log, fq, ctrl, prog):
+            cfcl, piva = s.cf, s.piva
             dest = self._destinazione(config, "bolli", res, cfcl, piva, cf, log,
                                       anno_periodo=anno or None)
             chiuso = "interrotta"
@@ -4851,8 +4849,8 @@ class FecGui:
                                        modalita_accesso, chiuso=chiuso)
             return [dest.radice]
 
-        self._esegui_in_process(cfcl, piva, _profilo_da_modalita(self.modalita.get()),
-            f"Bolli {trim_ui}/{anno}", op)
+        self._esegui_per_soggetti(soggetti, _profilo_da_modalita(self.modalita.get()),
+            f"Bolli {trim_ui}/{anno}", op, len(soggetti), conta_soggetti=True)
 
     # ─────────────────────────────────────────────────────────────────────────
     # TAB Utility - elenchi Excel di riepilogo (dev-only)
