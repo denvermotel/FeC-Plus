@@ -71,6 +71,20 @@ playwright install chromium</code></pre>
       <h3>Modalità di accesso e schede</h3>
       <p class="sub">Nel riquadro <strong>«Credenziali Entratel»</strong> si sceglie una volta sola la <strong>modalità di accesso</strong> (Studio - Delega Cliente, Studio - Cassetto proprio, Azienda, Libero professionista/Me stesso, Delega diretta) e, se si preferisce, l'accesso con <strong>SPID/CIE</strong> al posto delle credenziali Entratel, valida per tutte le schede. Oltre a <strong>Download Standard</strong> sono disponibili <strong>Richieste Massive</strong> (con scaricamento dei risultati delle richieste già inviate), <strong>Bolli Virtuali</strong>, <strong>Utility</strong> (esportazione Excel e CSV formato Agenzia delle Entrate) e <strong>Deleghe</strong> (anagrafica clienti delegati, con import/export CSV).</p>
 
+      <h3>Scelta del cliente</h3>
+      <p class="sub">In <strong>Download Standard</strong>, <strong>Richieste Massive</strong>, <strong>Bolli Virtuali</strong> e <strong>Utility</strong> il cliente si sceglie con un selettore che prende i soggetti dall'anagrafica <strong>Deleghe</strong>.</p>
+      <ul>
+        <li>Si cerca per <strong>nome</strong> o per <strong>codice fiscale</strong> e si sceglie dalla tendina. Si possono scegliere più soggetti.</li>
+        <li><strong>«Aggiungi tutte»</strong> aggiunge tutte le deleghe, <strong>«Svuota»</strong> toglie tutti i soggetti. Un singolo soggetto si toglie con doppio clic o con il tasto Canc.</li>
+        <li>Il campo <strong>P.IVA</strong> compare solo con un soggetto. Con più soggetti si usa la P.IVA indicata nella delega.</li>
+        <li>Con più soggetti l'operazione parte in coda, un soggetto dopo l'altro, con un solo accesso e il cambio di utenza fra l'uno e l'altro. Un soggetto che fallisce non ferma gli altri: alla fine compare un solo popup con l'elenco di chi non è stato completato.</li>
+        <li>In <strong>Richieste Massive</strong>, <strong>«Controlla risultati disponibili»</strong> considera tutti i soggetti scelti e mostra un solo elenco; se non se ne sceglie nessuno usa l'utenza di accesso.</li>
+        <li>Nella scheda <strong>Deleghe</strong>, il menu del tasto destro su una delega offre <strong>«Usa in»</strong> per ciascuna delle quattro schede: la scheda si apre con quel soggetto già scelto.</li>
+      </ul>
+
+      <h3>Metadati delle fatture</h3>
+      <p class="sub">Nella scheda <strong>Download Standard</strong> la casella <strong>«Scarica anche i metadati delle fatture»</strong> è accesa di default: accanto a ogni fattura viene salvato il file dei metadati (<code>_metadato.xml</code>). Spegnendola si scaricano solo le fatture e l'operazione è più rapida. Da riga di comando corrisponde a <code>--senza-metadati</code>.</p>
+
       <h3>Cartelle di download (Impostazioni)</h3>
       <p class="sub">In <strong>⚙ Impostazioni</strong> si imposta la cartella di download di default e, se serve, una cartella diversa per ogni tipo di documento.</p>
       <ul>
@@ -124,6 +138,7 @@ playwright install chromium</code></pre>
         <tr><td><code>--cartelle {ditta,sessione}</code></td><td>Organizzazione delle cartelle: per ditta (tipo di documento e anno) o per sessione (una cartella per lancio, con data e ora). Default: <code>ditta</code>.</td></tr>
         <tr><td><code>--no-anno</code></td><td>Con <code>--cartelle ditta</code>, niente sottocartella per anno.</td></tr>
         <tr><td><code>--csv-ade</code></td><td>Genera anche il CSV dell'elenco nel formato «Esporta la tabella» del portale (solo comandi di download).</td></tr>
+        <tr><td><code>--senza-metadati</code></td><td>Non scarica il file dei metadati di ogni fattura (solo comandi di download delle fatture).</td></tr>
         <tr><td><code>--dry-run</code></td><td>Mostra cosa verrebbe eseguito, senza fare login né download.</td></tr>
       </table>
 
