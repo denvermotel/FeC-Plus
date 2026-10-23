@@ -169,6 +169,45 @@ class TestWidget(unittest.TestCase):
             self.assertIsNone(self.s.soggetti())
         errore.assert_called_once()
 
+    def test_testo_scritto_si_aggiunge_ai_scelti(self):
+        self.s.aggiungi("Rossi Mario", "RSSMRA80A01H501U")
+        self.s.nome_var.set("Verdi Luigi")
+        r = self.s.soggetti()
+        self.assertEqual([x.cf for x in r], ["RSSMRA80A01H501U", "VRDLGI70B02F205X"])
+        self.assertEqual(self.s.nome_var.get(), "")
+
+    def test_testo_sconosciuto_con_scelti_errore(self):
+        self.s.aggiungi("Rossi Mario", "RSSMRA80A01H501U")
+        self.s.nome_var.set("Nessuno Qui")
+        with patch.object(sel.messagebox, "showerror") as errore:
+            self.assertIsNone(self.s.soggetti())
+        errore.assert_called_once()
+        self.assertIn("non riconosciuto", errore.call_args[0][1])
+
+    def test_omonimi_errore_distinto(self):
+        self.s.nome_var.set("Rossi Mario")
+        with patch.object(sel.messagebox, "showerror") as errore:
+            self.assertIsNone(self.s.soggetti())
+        errore.assert_called_once_with(
+            "Errore", "Più deleghe corrispondono a «Rossi Mario»: sceglila dall'elenco.")
+
+    def test_focus_sulla_tendina_non_la_chiude(self):
+        self.s.nome_var.set("verdi")
+        self.s._filtra()
+        self.assertTrue(self.s.aperta())
+        with patch.object(self.s, "focus_get", return_value=self.s.albero):
+            self.s._chiudi_se_fuori()
+        self.assertTrue(self.s.aperta())
+        with patch.object(self.s, "focus_get", return_value=self.root):
+            self.s._chiudi_se_fuori()
+        self.assertFalse(self.s.aperta())
+
+    def test_contatore_al_singolare(self):
+        self.s.aggiorna(ROWS[:1])
+        self.s.nome_var.set("rossi")
+        self.s._filtra()
+        self.assertEqual(self.s.contatore_var.get(), "1 di 1 delega")
+
     def test_aggiorna_tiene_i_scelti(self):
         self.s.aggiungi("Verdi Luigi", "VRDLGI70B02F205X")
         self.s.aggiorna(ROWS[:1])

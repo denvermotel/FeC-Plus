@@ -115,11 +115,16 @@ class SelettoreSoggetti(ttk.Frame):
     def _stili(self) -> None:
         from tkinter import font as tkfont
         self._font = tkfont.nametofont("TkDefaultFont")
+        radice = self._root()
+        # Ogni modifica allo stile genera un evento di cambio tema: una volta per finestra.
+        if getattr(radice, "_selettore_stili", False):
+            return
         st = ttk.Style(self)
         st.configure("Selettore.Treeview", rowheight=26, borderwidth=0, relief="flat")
         st.layout("Selettore.Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
         st.map("Selettore.Treeview", background=[("selected", _COL_EVIDENZIATO)],
                foreground=[("selected", "black")])
+        radice._selettore_stili = True
 
     def _costruisci_ricerca(self) -> None:
         self.riga_ricerca = ttk.Frame(self)
@@ -275,15 +280,15 @@ class SelettoreSoggetti(ttk.Frame):
         Con un solo soggetto vale la P.IVA del campo, altrimenti quella di ciascuna delega.
         Con `obbligatorio=False` e nulla di scelto né scritto torna un soggetto vuoto
         (l'utenza di accesso, senza cliente), senza avviso."""
-        if not self.scelti:
-            testo = self.nome_var.get().strip()
-            if not testo and not obbligatorio:
+        testo = self.nome_var.get().strip()
+        if not self.scelti and not testo:
+            if not obbligatorio:
                 return [Soggetto("", "", "")]
-            if not testo:
-                messagebox.showwarning("Soggetto non scelto",
-                                       "Cerca un nominativo e sceglilo dall'elenco, oppure "
-                                       "inserisci un C.F./P.IVA.")
-                return None
+            messagebox.showwarning("Soggetto non scelto",
+                                   "Cerca un nominativo e sceglilo dall'elenco, oppure "
+                                   "inserisci un C.F./P.IVA.")
+            return None
+        if testo:
             esatti = [o for o in self._opzioni if o[0].casefold() == testo.casefold()]
             trovati = esatti or filtra_opzioni(self._opzioni, testo)
             if len(trovati) == 1:
@@ -292,9 +297,13 @@ class SelettoreSoggetti(ttk.Frame):
                 try:
                     cf = normalizza_cf(testo)
                 except ValueError:
-                    messagebox.showerror("Errore", "Nominativo non riconosciuto: scegli un nome "
-                                                   "dall'elenco delle deleghe, oppure inserisci "
-                                                   "un C.F./P.IVA valido.")
+                    if len(trovati) > 1:
+                        messagebox.showerror("Errore", f"Più deleghe corrispondono a «{testo}»: "
+                                                       "sceglila dall'elenco.")
+                    else:
+                        messagebox.showerror("Errore", "Nominativo non riconosciuto: scegli un "
+                                                       "nome dall'elenco delle deleghe, oppure "
+                                                       "inserisci un C.F./P.IVA valido.")
                     return None
                 nome = next((t for t, c in self._opzioni if c == cf), cf)
             self.aggiungi(nome, cf)
@@ -361,8 +370,8 @@ class SelettoreSoggetti(ttk.Frame):
             cf = ""
         if cf and cf not in gia and all(c != cf for _, c in self._opzioni):
             self._visibili.append((f"Usa {cf} (non tra le deleghe)", cf, True))
-        self.contatore_var.set(f"{len(trovate)} di {len(self._opzioni)} deleghe" if trovate
-                               else "Nessuna delega trovata")
+        self.contatore_var.set(f"{len(trovate)} di {_testo_deleghe(len(self._opzioni))}"
+                               if trovate else "Nessuna delega trovata")
         self._popola()
         self._apri()
 
@@ -413,7 +422,10 @@ class SelettoreSoggetti(ttk.Frame):
             dove = self.focus_get()
         except (KeyError, tk.TclError):
             dove = None
-        if dove is not self.entry_nome:
+        # Il clic lento o la barra della tendina spostano il focus sulla tendina stessa.
+        dentro = dove is self.entry_nome or (
+            dove is not None and str(dove).startswith(str(self.tendina)))
+        if not dentro:
             self._chiudi()
 
     def _finestra_mossa(self, event) -> None:
