@@ -1313,6 +1313,7 @@ class FecGui:
         self._tab_utility(nb)
         # Anagrafica deleghe: ultima tab.
         self._tab_deleghe(nb)
+        self._aggiorna_selettori()
 
     # ── Fascia di avanzamento ─────────────────────────────────────────────────
 
@@ -1963,6 +1964,26 @@ class FecGui:
         cb = ttk.Combobox(frame, textvariable=var, values=values, state="readonly", width=34)
         cb.grid(row=row, column=1, sticky="w")
         return cb
+
+    def _selettore(self, frame, riga: int) -> "fec_selettore.SelettoreSoggetti":
+        """Selettore dei soggetti di una tab, al posto delle righe «CF Cliente» e «P.IVA»:
+        con un solo soggetto compare anche il campo P.IVA, opzionale."""
+        ttk.Label(frame, text="Cliente:").grid(row=riga, column=0, sticky="nw",
+                                               pady=4, padx=(0, 8))
+        sel = fec_selettore.SelettoreSoggetti(frame, getattr(self, "deleghe_rows", []))
+        sel.grid(row=riga, column=1, columnspan=2, sticky="ew")
+        frame.columnconfigure(1, weight=1)
+        return sel
+
+    def _aggiorna_selettori(self):
+        """Passa l'anagrafica deleghe corrente ai selettori delle tab (dopo ogni modifica)."""
+        rows = getattr(self, "deleghe_rows", None)
+        if rows is None:
+            return
+        for nome in ("std_sel", "mass_sel", "bolli_sel", "util_sel"):
+            sel = getattr(self, nome, None)
+            if sel is not None:
+                sel.aggiorna(rows)
 
     @staticmethod
     def _run_btn(frame, row: int, label: str, cmd, width: int = 18) -> ttk.Button:
@@ -3642,6 +3663,7 @@ class FecGui:
         # Contatore «N selezionate» accanto al pulsante (conta anche quelle non visibili).
         n = len(self._deleghe_selezionate())
         self.deleghe_sel_count.set(f"{n} selezionat{'a' if n == 1 else 'e'}" if n else "")
+        self._aggiorna_selettori()
 
     def _deleghe_selected_index(self):
         sel = self.deleghe_tree.selection()
@@ -3718,30 +3740,32 @@ class FecGui:
         self._deleghe_clear_form()
 
     # Destinazioni di «Usa in...» (menu tasto destro sulla tabella deleghe e pulsante
-    # «Usa per download»): etichetta → (attributo tab, attributo var CF, attributo var P.IVA).
+    # «Usa per download»): etichetta → (attributo tab, attributo selettore).
     # Le tab non ancora costruite (attributo assente) vengono saltate nel menu.
     _USA_IN_TABS = (
-        ("Download Standard",  "_std_tab",   "std_cf_cl",  "std_piva"),
-        ("Richieste Massive",  "_mass_tab",  "mass_cfcl",  "mass_piva"),
-        ("Bolli Virtuali",     "_bolli_tab", "bolli_cfcl", "bolli_piva"),
-        ("Utility",            "_util_tab",  "util_cfcl",  "util_piva"),
+        ("Download Standard",  "_std_tab",   "std_sel"),
+        ("Richieste Massive",  "_mass_tab",  "mass_sel"),
+        ("Bolli Virtuali",     "_bolli_tab", "bolli_sel"),
+        ("Utility",            "_util_tab",  "util_sel"),
     )
 
-    def _deleghe_usa_in(self, tab_attr: str, cf_attr: str, piva_attr: str):
-        """Precompila CF/P.IVA della tab indicata col cliente selezionato e la apre."""
+    def _deleghe_usa_in(self, tab_attr: str, sel_attr: str):
+        """Sceglie il cliente selezionato nel selettore della tab indicata e la apre."""
         i = self._deleghe_selected_index()
         if i is None:
             messagebox.showinfo("Deleghe", "Seleziona un cliente da usare.")
             return
         row = self.deleghe_rows[i]
-        getattr(self, cf_attr).set(row.get("codice_fiscale", ""))
-        getattr(self, piva_attr).set(row.get("partita_iva", ""))
+        cf = (str(row.get("codice_fiscale", "")).strip()
+              or str(row.get("partita_iva", "")).strip())
+        nome = str(row.get("denominazione", "")).strip() or cf
+        getattr(self, sel_attr).imposta(nome, cf, str(row.get("partita_iva", "")).strip())
         tab = getattr(self, tab_attr, None)
         if tab is not None:
             tab.master.select(tab)   # il notebook a cui è stata aggiunta la scheda
 
     def _deleghe_use(self):
-        self._deleghe_usa_in("_std_tab", "std_cf_cl", "std_piva")
+        self._deleghe_usa_in("_std_tab", "std_sel")
 
     def _deleghe_context_menu(self, event):
         """Tasto destro sulla tabella deleghe: seleziona la riga sotto il cursore e mostra
@@ -3754,13 +3778,12 @@ class FecGui:
         self.deleghe_tree.focus(iid)
 
         menu = tk.Menu(self.deleghe_tree, tearoff=0)
-        for label, tab_attr, cf_attr, piva_attr in self._USA_IN_TABS:
-            if not hasattr(self, tab_attr):     # tab assente (es. build diverse)
+        for label, tab_attr, sel_attr in self._USA_IN_TABS:
+            if not hasattr(self, sel_attr):     # tab assente o non ancora costruita
                 continue
             menu.add_command(
                 label=f"Usa in {label}",
-                command=lambda t=tab_attr, c=cf_attr, p=piva_attr:
-                    self._deleghe_usa_in(t, c, p))
+                command=lambda t=tab_attr, s=sel_attr: self._deleghe_usa_in(t, s))
         menu.add_separator()
         menu.add_command(label="↻ Aggiorna da AdE", command=self._deleghe_aggiorna_da_ade)
         menu.add_command(label="Elimina", command=self._deleghe_delete)
@@ -3851,9 +3874,7 @@ class FecGui:
         f = self._lf(tab)
 
         self.std_tipo    = tk.StringVar(value="Fatture Emesse")
-        self.std_cf_cl   = tk.StringVar()
-        self.std_piva    = tk.StringVar()
-        self.std_dal     = tk.StringVar()
+        self.std_dal    = tk.StringVar()
         self.std_al      = tk.StringVar()
         self.std_tipdata = tk.StringVar(value="1")
         self.std_filtro_controparte = tk.BooleanVar(value=False)
@@ -3886,8 +3907,7 @@ class FecGui:
             variable=self.std_includi_disposizione,
             command=self._includi_disposizione_cambiato)
 
-        r += 1; self._row(f, r, "CF Cliente:", self.std_cf_cl)
-        r += 1; self._row(f, r, "P.IVA (opzionale):", self.std_piva)
+        r += 1; self.std_sel = self._selettore(f, r)
 
         r += 1
         ttk.Checkbutton(f, text="Scarica solo le fatture intestate a un determinato "
@@ -3963,7 +3983,11 @@ class FecGui:
                                  "destinazione lo stesso file che il portale produce col "
                                  "pulsante «Esporta la tabella», utile per la riconciliazione "
                                  "con i gestionali: un solo file per l'intero periodo, con le "
-                                 "sole fatture effettivamente scaricate. ")
+                                 "sole fatture effettivamente scaricate. "
+                                 "«Cliente» cerca per nome o C.F. e accetta più soggetti: il "
+                                 "download parte per ciascuno in coda, con un solo accesso e "
+                                 "ognuno nella propria cartella. La P.IVA compare solo con un "
+                                 "soggetto; con più soggetti si usa quella della delega. ")
 
         r += 1; r = self._no_update_check(f, r)
         self._run_btn(f, r, "Avvia Download", self._run_standard)
@@ -4075,8 +4099,9 @@ class FecGui:
 
     def _run_standard(self):
         cf, pin, pwd, cfst = self._get_creds()
-        cfcl = self.std_cf_cl.get().strip()
-        piva = self.std_piva.get().strip()
+        soggetti = self.std_sel.soggetti()
+        if soggetti is None:
+            return
         dal  = self.std_dal.get().strip()
         al   = self.std_al.get().strip()
         tipo = self.std_tipo.get()
@@ -4097,7 +4122,6 @@ class FecGui:
         # e il campo è vuoto, in fase di login compare il popup di scelta. Se indicata,
         # si usa quella.
         if not self._validate(CF=cf, PIN=pin, Password=pwd, **{"CF Studio": cfst},
-                              **{"CF Cliente": cfcl},
                               **{"Data inizio": dal}, **{"Data fine": al}):
             return
 
@@ -4117,7 +4141,8 @@ class FecGui:
         def _con_riepilogo(corpo):
             """Esegue `corpo` raccogliendo destinazioni ed esiti; `sessione.txt` si
             scrive comunque, anche se il lavoro si interrompe a metà."""
-            def op(res, log, fq, ctrl, prog):
+            def op(res, s, log, fq, ctrl, prog):
+                cfcl, piva = s.cf, s.piva
                 dests, esiti, tipi = [], [], []
 
                 def _scarica(tipo_richiesta, **extra):
@@ -4183,10 +4208,11 @@ class FecGui:
                         "Messe a Disposizione": ["messe_disposizione"]}[tipo]
         try:
             fasi = sum(len(_fq.spezza_periodo(dal, al, "%d%m%Y")) for _ in tipi_in_coda)
-        except Exception:
-            fasi = len(tipi_in_coda)     # date invalide: ci pensa il download a dirlo
-        self._esegui_in_process(cfcl, piva, _profilo_da_modalita(self.modalita.get()),
-                                tipo, OPS[tipo], fasi)
+        except Exception as exc:  # noqa: BLE001 - DownloadError con il messaggio per l'utente
+            messagebox.showerror("Periodo non valido", str(exc))
+            return
+        self._esegui_per_soggetti(soggetti, _profilo_da_modalita(self.modalita.get()),
+                                  tipo, OPS[tipo], fasi * len(soggetti))
 
     # ─────────────────────────────────────────────────────────────────────────
     # TAB 2 - Richieste Massive
