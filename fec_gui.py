@@ -349,6 +349,7 @@ class FecGui:
         self.std_destdir = tk.StringVar(value=DEFAULT_DEST_DIR)
         self.std_escludi_scartate = tk.BooleanVar(value=True)
         self.std_estrai_p7m = tk.BooleanVar(value=False)
+        self.std_scarica_metadati = tk.BooleanVar(value=True)
         self.std_csv_ade = tk.BooleanVar(value=False)
         # Tipo documento "Fatture Emesse"/"Fatture Ricevute": aggiunge in coda,
         # sullo stesso periodo, rispettivamente le transfrontaliere emesse e le
@@ -445,6 +446,7 @@ class FecGui:
                                 or ETICHETTE_DELEGHE_DEFAULT["campo2"])
         self.std_escludi_scartate.set(bool(cfg.get("std_escludi_scartate_pa", True)))
         self.std_estrai_p7m.set(bool(cfg.get("std_estrai_p7m", False)))
+        self.std_scarica_metadati.set(bool(cfg.get("std_scarica_metadati", True)))
         self.std_csv_ade.set(bool(cfg.get("std_csv_ade", False)))
         self.sso_var.set(bool(cfg.get("login_sso", False)))
         self.std_includi_trans.set(bool(cfg.get("std_includi_trans", False)))
@@ -505,6 +507,7 @@ class FecGui:
             "deleghe_no_update": bool(self.deleghe_no_update_var.get()),
             "std_escludi_scartate_pa": bool(self.std_escludi_scartate.get()),
             "std_estrai_p7m": bool(self.std_estrai_p7m.get()),
+            "std_scarica_metadati": bool(self.std_scarica_metadati.get()),
             "std_csv_ade": bool(self.std_csv_ade.get()),
             "login_sso": bool(self.sso_var.get()),
             "std_includi_trans": bool(self.std_includi_trans.get()),
@@ -3841,6 +3844,11 @@ class FecGui:
             row=r, column=0, columnspan=2, sticky="w")
 
         r += 1
+        ttk.Checkbutton(f, text="Scarica anche i metadati delle fatture",
+                        variable=self.std_scarica_metadati).grid(
+            row=r, column=0, columnspan=2, sticky="w")
+
+        r += 1
         ttk.Checkbutton(f, text="Genera anche il CSV dell'elenco (formato Agenzia Entrate)",
                         variable=self.std_csv_ade).grid(
             row=r, column=0, columnspan=2, sticky="w")
@@ -3860,7 +3868,10 @@ class FecGui:
                                  "«Non scaricare fatture rifiutate da P.A.» salta le fatture "
                                  "scartate senza salvarne il file; «Estrai file p7m» sostituisce la "
                                  "busta firmata con l'XML estratto (mai entrambi i formati "
-                                 "insieme). I periodi superiori a 3 mesi vengono spezzati e "
+                                 "insieme). «Scarica anche i metadati» (acceso di default) "
+                                 "salva accanto a ogni fattura il suo file di metadati; "
+                                 "spegnendolo il download è più rapido. "
+                                 "I periodi superiori a 3 mesi vengono spezzati e "
                                  "scaricati automaticamente a blocchi. "
                                  "«Genera anche il CSV dell'elenco» salva nella cartella di "
                                  "destinazione lo stesso file che il portale produce col "
@@ -4012,6 +4023,7 @@ class FecGui:
 
         escludi_scartate = bool(self.std_escludi_scartate.get())
         estrai_p7m = bool(self.std_estrai_p7m.get())
+        scarica_metadati = bool(self.std_scarica_metadati.get())
         csv_ade = bool(self.std_csv_ade.get())
         includi_trans = bool(self.std_includi_trans.get())
         includi_disposizione = bool(self.std_includi_disposizione.get())
@@ -4032,6 +4044,7 @@ class FecGui:
                         dest_dir=dest.cartella, sottocartella=False, per_anno=dest.per_anno,
                         control=ctrl, log=log, progresso=prog,
                         escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m,
+                        scarica_metadati=scarica_metadati,
                         csv_ade=csv_ade, **extra)
                     esiti.append(esito)
                     return esito

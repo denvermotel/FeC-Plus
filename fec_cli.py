@@ -96,6 +96,10 @@ def build_parser() -> argparse.ArgumentParser:
     acc.add_argument("--estrai-p7m", action="store_true", default=False,
                      help="Estrae l'XML dai file firmati .p7m al posto dell'originale "
                           "(richiede il pacchetto asn1crypto)")
+    acc.add_argument("--senza-metadati", dest="scarica_metadati", action="store_false",
+                     default=True,
+                     help="Non scarica il file dei metadati di ogni fattura "
+                          "(default: scaricati; solo per i comandi di download)")
     acc.add_argument("--csv-ade", action="store_true", default=False,
                      help="Genera anche il CSV dell'elenco nel formato «Esporta la "
                           "tabella» del portale AdE (solo per i comandi di download)")
@@ -236,6 +240,7 @@ def _dispatch(args, auth, fq):
     if spec.kind == "download":
         kw["escludi_scartate_pa"] = args.escludi_scartate_pa
         kw["estrai_p7m"] = args.estrai_p7m
+        kw["scarica_metadati"] = args.scarica_metadati
         kw["csv_ade"] = args.csv_ade
         kw["per_anno"] = dest.per_anno
     if spec.kind == "invio":
@@ -292,7 +297,7 @@ def main(argv=None) -> int:
               f"cfstudio={args.cfstudio!r}")
         for k in ("dal", "al", "tipo", "tipo_data", "trimestre", "anno", "dest",
                   "cartelle", "no_anno",
-                  "escludi_scartate_pa", "estrai_p7m", "csv_ade"):
+                  "escludi_scartate_pa", "estrai_p7m", "scarica_metadati", "csv_ade"):
             if hasattr(args, k):
                 print(f"  {k} = {getattr(args, k)!r}")
         print("  (login e download NON eseguiti)")
