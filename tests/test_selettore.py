@@ -16,9 +16,10 @@ import fec_selettore as sel
 ROWS = [
     {"codice_fiscale": "RSSMRA80A01H501U", "partita_iva": "01234567890",
      "denominazione": "Rossi Mario"},
-    {"codice_fiscale": "VRDLGI70B02F205X", "partita_iva": "", "denominazione": "Verdi Luigi"},
+    {"codice_fiscale": "VRDLGI70B02F205X", "partita_iva": "", "denominazione": "Verdi Luigi",
+     "etichetta1": "studio nord"},
     {"codice_fiscale": "BNCGNN60C03L219Z", "partita_iva": "09876543210",
-     "denominazione": "Rossi Mario"},
+     "denominazione": "Rossi Mario", "etichetta1": "", "etichetta2": "Studio Nord"},
     {"codice_fiscale": "", "partita_iva": "", "denominazione": "Senza codice"},
 ]
 
@@ -43,6 +44,18 @@ class TestLogica(unittest.TestCase):
 
     def test_riga_senza_identificativo_esclusa(self):
         self.assertNotIn("Senza codice", [t for t, _ in sel.opzioni_soggetti(ROWS)])
+
+    def test_etichette_per_cf(self):
+        et = sel.etichette_per_cf(ROWS)
+        self.assertEqual(et["VRDLGI70B02F205X"], "studio nord")
+        self.assertEqual(et["BNCGNN60C03L219Z"], "Studio Nord")
+        self.assertEqual(et["RSSMRA80A01H501U"], "")
+
+    def test_filtra_per_etichetta(self):
+        opz = sel.opzioni_soggetti(ROWS)
+        trovate = sel.filtra_opzioni(opz, "nord", sel.etichette_per_cf(ROWS))
+        self.assertEqual(sorted(c for _, c in trovate), ["BNCGNN60C03L219Z", "VRDLGI70B02F205X"])
+        self.assertEqual(sel.filtra_opzioni(opz, "nord"), [])
 
     def test_piva_per_cf(self):
         self.assertEqual(sel.piva_per_cf(ROWS)["RSSMRA80A01H501U"], "01234567890")
@@ -189,7 +202,45 @@ class TestWidget(unittest.TestCase):
         with patch.object(sel.messagebox, "showerror") as errore:
             self.assertIsNone(self.s.soggetti())
         errore.assert_called_once_with(
-            "Errore", "Più deleghe corrispondono a «Rossi Mario»: sceglila dall'elenco.")
+            "Errore", "Più deleghe corrispondono a «Rossi Mario»: sceglila dall'elenco, "
+                      "oppure aggiungile tutte con il pulsante accanto alla ricerca.")
+
+    def test_ricerca_per_etichetta(self):
+        self.s.nome_var.set("STUDIO nord")
+        self.s._filtra()
+        self.assertEqual(sorted(self.s.voci()), ["Rossi Mario - BNCGNN60C03L219Z", "Verdi Luigi"])
+
+    def test_tendina_mostra_l_etichetta_che_ha_trovato(self):
+        self.s.nome_var.set("nord")
+        self.s._filtra()
+        testi = [self.s.albero.item(i, "values")[0] for i in self.s.albero.get_children()]
+        self.assertIn("Verdi Luigi  ·  studio nord", testi)
+
+    def test_pulsante_aggiunge_solo_le_trovate(self):
+        self.s.nome_var.set("nord")
+        self.s._filtra()
+        self.assertEqual(self.s.pulsante_tutte.cget("text"), "Aggiungi le 2 trovate")
+        self.s.aggiungi_tutte()
+        self.assertEqual(sorted(x.cf for x in self.s.scelti),
+                         ["BNCGNN60C03L219Z", "VRDLGI70B02F205X"])
+        self.assertEqual(self.s.nome_var.get(), "")
+        self.assertFalse(self.s.aperta())
+        self.assertEqual(self.s.pulsante_tutte.cget("text"), "Aggiungi tutte")
+
+    def test_frecce_non_disturbate_dal_mouse_fermo(self):
+        # Con il mouse fermo sopra la tendina, lo scorrimento da tastiera fa arrivare un
+        # <Motion> con le stesse coordinate: non deve spostare la riga evidenziata.
+        self.s.nome_var.set("i")
+        self.s._filtra()
+        # La finestra di test è nascosta: identify_row non troverebbe righe.
+        with patch.object(self.s, "winfo_pointerxy", return_value=(500, 500)), \
+                patch.object(self.s.albero, "identify_row", return_value="0"):
+            self.s._giu()
+            self.s._giu()
+            self.s.albero.event_generate("<Motion>", x=10, y=5, rootx=500, rooty=500)
+            self.assertEqual(self.s._evid, 1)
+            self.s.albero.event_generate("<Motion>", x=10, y=5, rootx=510, rooty=500)
+            self.assertEqual(self.s._evid, 0)
 
     def test_focus_sulla_tendina_non_la_chiude(self):
         self.s.nome_var.set("verdi")

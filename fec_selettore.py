@@ -1,8 +1,9 @@
 # FeC-Plus - v0.04 dev
 """fec_selettore.py - Selettore dei soggetti (deleghe) con ricerca per nominativo e scelta multipla.
 
-Un campo di ricerca con tendina a comparsa: con le frecce e Invio,
-o con un clic, una riga viene aggiunta all'elenco dei soggetti scelti. Un C.F./P.IVA valido
+Un campo di ricerca con tendina a comparsa, per nome, C.F. o etichetta della delega: con le
+frecce e Invio, o con un clic, una riga viene aggiunta all'elenco dei soggetti scelti; il
+pulsante accanto alla ricerca aggiunge in un colpo tutte le deleghe trovate. Un C.F./P.IVA valido
 scritto a mano che non è tra le deleghe viene proposto come ultima riga. Con un solo soggetto
 scelto compare il campo P.IVA, opzionale (serve ai C.F. con più partite IVA); con più soggetti
 si usa la P.IVA di ciascuna delega.
@@ -45,12 +46,23 @@ def piva_per_cf(rows: list[dict]) -> dict[str, str]:
     return {_cf(r): (r.get("partita_iva") or "").strip() for r in rows if _cf(r)}
 
 
-def filtra_opzioni(opzioni: list[tuple[str, str]], testo: str) -> list[tuple[str, str]]:
-    """Le opzioni il cui testo o C.F. contiene `testo`, senza badare alle maiuscole."""
+def etichette_per_cf(rows: list[dict]) -> dict[str, str]:
+    """Le due etichette libere della delega per ogni C.F., unite da « · » (vuoto se assenti)."""
+    return {_cf(r): " · ".join(e for e in ((r.get("etichetta1") or "").strip(),
+                                           (r.get("etichetta2") or "").strip()) if e)
+            for r in rows if _cf(r)}
+
+
+def filtra_opzioni(opzioni: list[tuple[str, str]], testo: str,
+                   etichette: dict[str, str] | None = None) -> list[tuple[str, str]]:
+    """Le opzioni il cui testo, C.F. o etichetta (se `etichette` è dato) contiene `testo`,
+    senza badare alle maiuscole."""
     q = (testo or "").strip().casefold()
     if not q:
         return list(opzioni)
-    return [o for o in opzioni if q in o[0].casefold() or q in o[1].casefold()]
+    etichette = etichette or {}
+    return [o for o in opzioni if q in o[0].casefold() or q in o[1].casefold()
+            or q in etichette.get(o[1], "").casefold()]
 
 
 def normalizza_cf(testo: str) -> str:
@@ -99,6 +111,10 @@ class SelettoreSoggetti(ttk.Frame):
         self.scelti: list[Soggetto] = []
         self._opzioni: list[tuple[str, str]] = []
         self._pive: dict[str, str] = {}
+        self._etichette: dict[str, str] = {}
+        self._da_etichetta: dict[str, str] = {}              # C.F. trovati solo per etichetta
+        self._puntatore = None                               # ultima posizione del mouse vista
+        self.testo_tutte_var = tk.StringVar(value="Aggiungi tutte")
         self._visibili: list[tuple[str, str, bool]] = []     # (testo, C.F., inserito a mano)
         self._evid = -1
         self._aperta = False
@@ -134,14 +150,14 @@ class SelettoreSoggetti(ttk.Frame):
         self.entry_nome = ttk.Entry(self.riga_ricerca, textvariable=self.nome_var,
                                     font=self._font)
         self.entry_nome.grid(row=0, column=1, sticky="ew", ipady=3)
-        self._segnaposto = tk.Label(self.entry_nome, text="Cerca per nome o C.F.",
+        self._segnaposto = tk.Label(self.entry_nome, text="Cerca per nome, C.F. o etichetta",
                                     fg=_COL_TENUE, bg="white", font=self._font, cursor="xterm")
         self._segnaposto.bind("<Button-1>", lambda _e: self.entry_nome.focus_set())
         self.pulsante_cancella = tk.Label(self.riga_ricerca, text="✕", fg=_COL_TENUE,
                                           cursor="hand2", padx=6)
         self.pulsante_cancella.bind("<Button-1>", lambda _e: self._svuota_ricerca())
         self.pulsante_cancella.grid(row=0, column=2)
-        self.pulsante_tutte = ttk.Button(self.riga_ricerca, text="Aggiungi tutte",
+        self.pulsante_tutte = ttk.Button(self.riga_ricerca, textvariable=self.testo_tutte_var,
                                          command=self.aggiungi_tutte)
         self.pulsante_tutte.grid(row=0, column=3, padx=(8, 0))
         self.pulsante_svuota = ttk.Button(self.riga_ricerca, text="Svuota", command=self.svuota)
@@ -156,6 +172,7 @@ class SelettoreSoggetti(ttk.Frame):
         e.bind("<Escape>", self._esc)
         e.bind("<FocusOut>", lambda _e: self.after(200, self._chiudi_se_fuori))
         self.nome_var.trace_add("write", lambda *_: self._aggiorna_segnaposto())
+        self.nome_var.trace_add("write", lambda *_: self._aggiorna_pulsante_tutte())
         self._aggiorna_segnaposto()
 
     def _costruisci_elenco(self) -> None:
@@ -219,6 +236,7 @@ class SelettoreSoggetti(ttk.Frame):
         rows = list(rows)
         self._opzioni = opzioni_soggetti(rows)
         self._pive = piva_per_cf(rows)
+        self._etichette = etichette_per_cf(rows)
         n = len(self._opzioni)
         self.info_var.set(_testo_deleghe(n))
         if self._aperta:
@@ -253,11 +271,16 @@ class SelettoreSoggetti(ttk.Frame):
         self._ridisegna()
 
     def aggiungi_tutte(self) -> None:
+        """Tutte le deleghe, oppure, con un testo nella ricerca, solo quelle trovate."""
+        testo = self.nome_var.get().strip()
         gia = {s.cf for s in self.scelti}
-        for nome, cf in self._opzioni:
+        for nome, cf in (self._trovate(testo) if testo else self._opzioni):
             if cf not in gia:
                 self.scelti.append(Soggetto(nome or cf, cf, self._pive.get(cf, "")))
                 gia.add(cf)
+        if testo:
+            self.nome_var.set("")
+            self._chiudi()
         self._ridisegna()
 
     def svuota(self) -> None:
@@ -290,7 +313,7 @@ class SelettoreSoggetti(ttk.Frame):
             return None
         if testo:
             esatti = [o for o in self._opzioni if o[0].casefold() == testo.casefold()]
-            trovati = esatti or filtra_opzioni(self._opzioni, testo)
+            trovati = esatti or filtra_opzioni(self._opzioni, testo, self._etichette)
             if len(trovati) == 1:
                 nome, cf = trovati[0]
             else:
@@ -299,7 +322,9 @@ class SelettoreSoggetti(ttk.Frame):
                 except ValueError:
                     if len(trovati) > 1:
                         messagebox.showerror("Errore", f"Più deleghe corrispondono a «{testo}»: "
-                                                       "sceglila dall'elenco.")
+                                                       "sceglila dall'elenco, "
+                                                       "oppure aggiungile tutte con il "
+                                                       "pulsante accanto alla ricerca.")
                     else:
                         messagebox.showerror("Errore", "Nominativo non riconosciuto: scegli un "
                                                        "nome dall'elenco delle deleghe, oppure "
@@ -348,6 +373,21 @@ class SelettoreSoggetti(ttk.Frame):
         else:
             self._segnaposto.place(x=4, rely=0.5, anchor="w")
 
+    def _trovate(self, testo: str) -> list[tuple[str, str]]:
+        """Deleghe che corrispondono a `testo`, esclusi i soggetti già scelti."""
+        gia = {s.cf for s in self.scelti}
+        return [o for o in filtra_opzioni(self._opzioni, testo, self._etichette)
+                if o[1] not in gia]
+
+    def _aggiorna_pulsante_tutte(self) -> None:
+        testo = self.nome_var.get().strip()
+        if not testo:
+            self.testo_tutte_var.set("Aggiungi tutte")
+            return
+        n = len(self._trovate(testo))
+        self.testo_tutte_var.set("Aggiungi la trovata" if n == 1
+                                 else f"Aggiungi le {n} trovate")
+
     def _svuota_ricerca(self) -> None:
         self.nome_var.set("")
         self._chiudi()
@@ -361,9 +401,14 @@ class SelettoreSoggetti(ttk.Frame):
             self._visibili = []
             self._chiudi()
             return
+        trovate = self._trovate(testo)
         gia = {s.cf for s in self.scelti}
-        trovate = [o for o in filtra_opzioni(self._opzioni, testo) if o[1] not in gia]
         self._visibili = [(t, c, False) for t, c in trovate]
+        # Trovata per etichetta: la tendina la mostra, altrimenti la riga non si spiega.
+        q = testo.strip().casefold()
+        self._da_etichetta = {c: self._etichette[c] for t, c in trovate
+                              if q not in t.casefold() and q not in c.casefold()
+                              and self._etichette.get(c)}
         try:
             cf = normalizza_cf(testo)
         except ValueError:
@@ -379,7 +424,9 @@ class SelettoreSoggetti(ttk.Frame):
         self.albero.delete(*self.albero.get_children())
         for i, (testo, cf, mano) in enumerate(self._visibili):
             tag = "mano" if mano else ("dispari" if i % 2 else "pari")
-            self.albero.insert("", tk.END, iid=str(i), values=(testo, "" if mano else cf),
+            etichetta = "" if mano else self._da_etichetta.get(cf, "")
+            mostrato = f"{testo}  ·  {etichetta}" if etichetta else testo
+            self.albero.insert("", tk.END, iid=str(i), values=(mostrato, "" if mano else cf),
                                tags=(tag,))
         n = len(self._visibili)
         self.albero.configure(height=max(1, min(n, _RIGHE_MAX)))
@@ -450,7 +497,14 @@ class SelettoreSoggetti(ttk.Frame):
 
     # -- eventi
 
+    def _segna_puntatore(self) -> None:
+        try:
+            self._puntatore = self.winfo_pointerxy()
+        except tk.TclError:
+            self._puntatore = None
+
     def _giu(self, _event=None):
+        self._segna_puntatore()
         if not self._aperta and self.nome_var.get().strip():
             self._filtra()
         if self._visibili:
@@ -458,6 +512,7 @@ class SelettoreSoggetti(ttk.Frame):
         return "break"
 
     def _su(self, _event=None):
+        self._segna_puntatore()
         if self._visibili and self._evid > 0:
             self._evidenzia(self._evid - 1)
         return "break"
@@ -474,6 +529,12 @@ class SelettoreSoggetti(ttk.Frame):
         return "break"
 
     def _al_passaggio(self, event) -> None:
+        # Quando le frecce fanno scorrere la tendina sotto un mouse fermo, Windows manda un
+        # <Motion> senza spostamento: seguirlo riporterebbe l'evidenziazione sotto il mouse.
+        posizione = (event.x_root, event.y_root)
+        if posizione == self._puntatore:
+            return
+        self._puntatore = posizione
         riga = self.albero.identify_row(event.y)
         if riga and int(riga) != self._evid:
             self._evidenzia(int(riga))

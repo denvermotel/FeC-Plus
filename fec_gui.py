@@ -3990,7 +3990,9 @@ class FecGui:
                                  "pulsante «Esporta la tabella», utile per la riconciliazione "
                                  "con i gestionali: un solo file per l'intero periodo, con le "
                                  "sole fatture effettivamente scaricate. "
-                                 "«Cliente» cerca per nome o C.F. e accetta più soggetti: il "
+                                 "«Cliente» cerca per nome, C.F. o etichetta della delega e "
+                                 "accetta più soggetti; con un testo nella ricerca il "
+                                 "pulsante accanto aggiunge tutte le deleghe trovate. Il "
                                  "download parte per ciascuno in coda, con un solo accesso e "
                                  "ognuno nella propria cartella. La P.IVA compare solo con un "
                                  "soggetto; con più soggetti si usa quella della delega. ")
