@@ -47,6 +47,39 @@ class TestEseguiPerSoggetti(AppGuiCase):
         self.app._esegui_per_soggetti(soggetti, 1, "Prova", op, **kw)
         self.root.update()
 
+    def test_la_barra_segue_login_e_cambio_utenza(self):
+        import fec_gui
+
+        def login(*a, log=print, **k):
+            log("Invio le credenziali al login telematico AdE...")
+            log("Configuro l'utenza di lavoro...")
+            return _res("login")
+        self.autentica.side_effect = login
+        messaggi = []
+        with patch.object(fec_gui.ProgressoGUI, "messaggio",
+                          lambda _self, testo: messaggi.append(testo)):
+            self._esegui([ROSSI, VERDI])
+        self.assertEqual(messaggi[:4], ["Collegamento al portale dell'Agenzia...",
+                                        "Accesso in corso...",
+                                        "Scelta dell'utenza di lavoro...",
+                                        "Accesso riuscito, avvio l'operazione..."])
+        self.assertIn("Cambio utenza: Verdi Luigi...", messaggi)
+
+    def test_stati_legati_a_righe_di_log_reali(self):
+        # Se ade_auth o fec_deleghe_sync cambiano il testo del log, lo stato sparirebbe
+        # in silenzio: ogni prefisso deve esistere nel sorgente.
+        import fec_gui
+        radice = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        sorgente = ""
+        for nome in ("ade_auth.py", "fec_deleghe_sync.py"):
+            with open(os.path.join(radice, nome), encoding="utf-8") as fh:
+                sorgente += fh.read()
+        for prefisso, _stato in fec_gui.STATI_DA_LOG:
+            self.assertIn(prefisso, sorgente)
+        self.assertEqual(fec_gui.stato_da_log("  Login riuscito (cookie SSO ottenuti)."),
+                         "Accesso riuscito, preparo la sessione...")
+        self.assertIsNone(fec_gui.stato_da_log("Scarico IT01234567890_00001.xml"))
+
     def test_un_soggetto_un_solo_login(self):
         self._esegui([ROSSI])
         self.assertEqual(self.autentica.call_count, 1)

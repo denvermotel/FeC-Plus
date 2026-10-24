@@ -20,7 +20,10 @@ from __future__ import annotations
 
 __version__ = "0.04 dev"
 
+import json
 from datetime import datetime
+from types import SimpleNamespace
+
 import requests
 
 # Codici servizio rilevanti per Fatture&Corrispettivi (vedi fec_deleghe.SERVIZIO_FATTURE
@@ -32,10 +35,11 @@ PORTALE = "https://portale.agenziaentrate.gov.it"
 APPTEL = "https://apptel.agenziaentrate.gov.it"
 DELEGANTI_URL = f"{APPTEL}/deleghe-portale-rest/rs/delegheUniche/deleganti"
 
-# Valore osservato in una cattura HAR reale del 2026-09-15: come X_APPL_DEFAULT in
-# ade_auth.py, può cambiare a un redeploy AdE - in tal caso va ricatturato un HAR
-# (pulsante Test Login -> "Cattura HAR generico", navigando fino al portale Deleghe).
-X_APPL_DELEGHE_DEFAULT = "ad9ff8e015bfc8c2737e6ea0c5299518485b811"
+# Il portale rinnova `x-appl` a ogni passaggio di sessione e lo restituisce
+# nell'header delle risposte (initPortale, poi initLight di apptel): un valore
+# vecchio fa rispondere 403 a delegheUniche/deleganti. Questo è solo il ripiego
+# quando nessuna risposta lo porta.
+X_APPL_DELEGHE_DEFAULT = "8b4242aff2c22e1addf87b79b101788f656151"
 
 _HTTP_TIMEOUT = (15, 60)
 
@@ -102,14 +106,20 @@ def _unix_time() -> str:
     return str(int(time.time() * 1000))
 
 
-def _headers_apptel() -> dict:
+def _headers_apptel(x_appl: str) -> dict:
     return {
         "Accept": "application/json, text/plain, */*",
         "Content-Type": "application/json",
         "Origin": PORTALE,
         "Referer": f"{PORTALE}/",
-        "x-appl": X_APPL_DELEGHE_DEFAULT,
+        "x-appl": x_appl,
     }
+
+
+def _x_appl(risposta, precedente: str) -> str:
+    """`x-appl` restituito da una risposta, o `precedente` se non c'è."""
+    valore = (getattr(risposta, "headers", None) or {}).get("x-appl") or ""
+    return valore.strip() or precedente
 
 
 class SincronizzazioneBloccata(RuntimeError):
@@ -117,21 +127,64 @@ class SincronizzazioneBloccata(RuntimeError):
     sul dominio apptel/portale-rest) o ha risposto in una forma inattesa."""
 
 
-def _bootstrap_portale(session: requests.Session, log) -> None:
-    """Visita le pagine che, per il portale Deleghe, impostano i cookie di sessione
-    necessari (stesso pattern già noto per ivaservizi in ade_auth: la prima
-    initPortale può rispondere 501 ma imposta comunque i cookie)."""
-    session.get(f"{PORTALE}/PortaleWeb/home?to=FATBTB", verify=False,
-               timeout=_HTTP_TIMEOUT)
+def _bootstrap_portale(session: requests.Session, log) -> str:
+    """Visita la home del portale (non quella di Fatture e Corrispettivi) e
+    initPortale, che impostano i cookie di sessione del portale Deleghe (la prima
+    initPortale può rispondere 501 ma imposta comunque i cookie). Ritorna l'x-appl
+    restituito, o il ripiego."""
+    session.get(f"{PORTALE}/PortaleWeb/home", verify=False, timeout=_HTTP_TIMEOUT)
+    x_appl = X_APPL_DELEGHE_DEFAULT
     for _ in range(2):
         r = session.get(f"{PORTALE}/portale-rest/rs/initPortale?v={_unix_time()}",
                         verify=False, timeout=_HTTP_TIMEOUT)
+        x_appl = _x_appl(r, x_appl)
         if r.status_code == 200:
             break
     log("Bootstrap portale Deleghe completato.")
+    return x_appl
 
 
-def fetch_deleganti_raw(auth, *, log=print) -> list[dict]:
+def _utenza_studio(session: requests.Session, cf_studio: str, x_appl: str, log) -> str:
+    """Porta l'utenza di lavoro del portale sullo studio, come «Cambia utenza»: dopo
+    il login è la persona che accede, e per lei l'elenco deleganti è vuoto. Ritorna
+    l'x-appl aggiornato. Senza `cf_studio`, o se non è tra gli incarichi, resta
+    sull'utenza personale."""
+    cf_studio = (cf_studio or "").strip().upper()
+    if not cf_studio:
+        return x_appl
+    r = session.get(f"{PORTALE}/portale-rest/rs/listaIncarichi?v={_unix_time()}",
+                    headers=_headers_apptel(x_appl), verify=False, timeout=_HTTP_TIMEOUT)
+    x_appl = _x_appl(r, x_appl)
+    try:
+        incarichi = (r.json() or {}).get("listaIncarichi") or []
+    except ValueError:
+        incarichi = []
+    chiave = next((str(i.get("chiave", "")) for i in incarichi
+                   if str(i.get("codicefiscale", "")).strip().upper() == cf_studio), "")
+    if not chiave:
+        log(f"⚠️  Lo studio {cf_studio} non è tra gli incarichi dell'utente: resto "
+            "sull'utenza personale.")
+        return x_appl
+    if chiave.upper() == cf_studio:      # lo studio è l'utente stesso: niente da cambiare
+        return x_appl
+    r = session.post(f"{PORTALE}/portale-rest/rs/cambiautenza?v={_unix_time()}",
+                     headers=_headers_apptel(x_appl),
+                     data=json.dumps({"chiave": chiave, "typeRole": "2"}),
+                     verify=False, timeout=_HTTP_TIMEOUT)
+    # Il portale risponde 409 anche quando il cambio riesce (verificato dalle
+    # infouser successive in una cattura reale).
+    if r.status_code not in (200, 204, 409):
+        raise SincronizzazioneBloccata(
+            f"Cambio dell'utenza di lavoro sullo studio {cf_studio} rifiutato "
+            f"(HTTP {r.status_code}).")
+    x_appl = _x_appl(r, x_appl)
+    r = session.get(f"{PORTALE}/portale-rest/rs/initPortale?v={_unix_time()}",
+                    headers=_headers_apptel(x_appl), verify=False, timeout=_HTTP_TIMEOUT)
+    log(f"Utenza di lavoro: studio {cf_studio}.")
+    return _x_appl(r, x_appl)
+
+
+def fetch_deleganti_raw(auth, *, cf_studio: str = "", log=print) -> list[dict]:
     """
     Tenta di ottenere l'elenco grezzo delle deleghe (tutti i servizi, non solo
     Fatture&Corrispettivi - vedi SERVIZI_RILEVANTI/elabora_deleganti per il
@@ -145,19 +198,22 @@ def fetch_deleganti_raw(auth, *, log=print) -> list[dict]:
     """
     session = auth.session
     try:
-        _bootstrap_portale(session, log)
-        session.get(f"{APPTEL}/deleghe-portale-rest/rs/initLight?v={_unix_time()}",
-                   headers=_headers_apptel(), verify=False, timeout=_HTTP_TIMEOUT)
+        x_appl = _bootstrap_portale(session, log)
+        x_appl = _utenza_studio(session, cf_studio, x_appl, log)
+        r_init = session.get(f"{APPTEL}/deleghe-portale-rest/rs/initLight?v={_unix_time()}",
+                             headers=_headers_apptel(x_appl), verify=False,
+                             timeout=_HTTP_TIMEOUT)
+        x_appl = _x_appl(r_init, x_appl)
         r = session.post(f"{DELEGANTI_URL}?v={_unix_time()}",
-                        headers=_headers_apptel(), data='{"stato":"A"}',
+                        headers=_headers_apptel(x_appl), data='{"stato":"A"}',
                         verify=False, timeout=_HTTP_TIMEOUT)
     except requests.RequestException as exc:
         raise SincronizzazioneBloccata(f"Errore di rete: {exc}") from exc
 
     if r.status_code != 200:
         raise SincronizzazioneBloccata(
-            f"Il portale ha risposto HTTP {r.status_code} (probabile blocco "
-            "anti-bot): serve il backend browser per questa operazione.")
+            f"Il portale ha risposto HTTP {r.status_code} all'elenco deleganti "
+            f"(initLight apptel: HTTP {getattr(r_init, 'status_code', '?')}).")
     try:
         dati = r.json()
     except ValueError as exc:
@@ -169,6 +225,9 @@ def fetch_deleganti_raw(auth, *, log=print) -> list[dict]:
         raise SincronizzazioneBloccata(
             "La risposta non contiene il campo 'lista' atteso.")
     log(f"Elenco deleghe ottenuto via requests: {len(lista)} record.")
+    if not lista:
+        log("⚠️  Elenco vuoto: controlla che «CF Studio» nelle credenziali sia il codice "
+            "fiscale dello studio delegato.")
     return lista
 
 
@@ -194,11 +253,15 @@ def sincronizza(creds, *, log=print, forza_browser: bool = False) -> list[dict]:
     import ade_auth
     import fec_deps
 
+    cf_studio = getattr(creds, "cfstudio", "") or ""
     if not forza_browser:
         log("Sincronizzazione deleghe: provo il backend leggero (requests)...")
         try:
-            auth = ade_auth.autentica(creds, backend="requests", log=log)
-            return fetch_deleganti_raw(auth, log=log)
+            # Le Deleghe stanno sul portale: niente scelta utenza di Fatture e
+            # Corrispettivi, che costava tempo e non serve.
+            sessione = ade_auth.login_portale(creds, log=log)
+            return fetch_deleganti_raw(SimpleNamespace(session=sessione),
+                                       cf_studio=cf_studio, log=log)
         except (SincronizzazioneBloccata, ade_auth.AuthError) as exc:
             log(f"Backend requests non utilizzabile: {exc}")
 
@@ -211,4 +274,4 @@ def sincronizza(creds, *, log=print, forza_browser: bool = False) -> list[dict]:
 
     log("Riprovo con il backend browser (Playwright)...")
     auth = ade_auth.autentica(creds, backend="browser", headless=True, log=log)
-    return fetch_deleganti_raw(auth, log=log)
+    return fetch_deleganti_raw(auth, cf_studio=cf_studio, log=log)

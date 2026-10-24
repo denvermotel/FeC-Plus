@@ -3,9 +3,14 @@
 """Test di FecGui._deleghe_controlla_canali_nuovi, in isolamento dal resto
 della GUI (stesso approccio di test_nastro.py/test_progresso.py)."""
 
+import os
+import sys
 import tkinter as tk
 import unittest
 from unittest.mock import MagicMock, patch
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import fec_download
 import fec_gui
@@ -211,6 +216,41 @@ class TestDelegheSincronizzaDaPortale(unittest.TestCase):
 
         self.assertFalse(esito)
         self.app._deleghe_controlla_canali_nuovi.assert_not_called()
+        self.root.update()
+        self.assertEqual(self.app.stato_var.get(), "Accesso non riuscito.")
+
+    @patch("fec_deleghe_sync.sincronizza")
+    def test_la_barra_segue_il_collegamento(self, mock_sync):
+        visti = []
+
+        def sincronizza(creds, log):
+            log("Invio le credenziali al login telematico AdE...")
+            self.root.update()
+            visti.append(self.app.stato_var.get())
+            return [{"cfDelegante": "AAA", "denomDelegante": "Cliente A",
+                     "servizi": [{"idServizio": "I42"}],
+                     "dataInizioDel": "01/01/2020", "dataFineDel": "01/01/2030"}]
+        mock_sync.side_effect = sincronizza
+        self.app._get_creds = MagicMock(return_value=("cf", "pin", "pwd", "cfst"))
+
+        self.app._deleghe_sincronizza_da_portale(soglia_data="", forza_tutte=False)
+
+        self.assertEqual(visti, ["Accesso in corso..."])
+        self.root.update()
+        self.assertEqual(self.app.stato_var.get(), "Deleghe aggiornate: 0 nuove, 1 già note.")
+
+    @patch("fec_deleghe_sync.sincronizza", return_value=[])
+    def test_elenco_vuoto_non_fa_avanzare_la_data(self, mock_sync):
+        self.app._get_creds = MagicMock(return_value=("cf", "pin", "pwd", "cfst"))
+        self.app._deleghe_controlla_canali_nuovi = MagicMock()
+
+        esito = self.app._deleghe_sincronizza_da_portale(soglia_data="", forza_tutte=False)
+
+        self.assertFalse(esito)
+        self.app._deleghe.save_deleghe.assert_not_called()
+        self.root.update()
+        self.assertEqual(self.app.stato_var.get(),
+                         "Il portale ha restituito un elenco di deleghe vuoto.")
 
 
 if __name__ == "__main__":

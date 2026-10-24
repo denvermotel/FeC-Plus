@@ -292,6 +292,29 @@ class ProgressoGUI:
         return "  ·  ".join(pezzi)
 
 
+# Righe di log di ade_auth e fec_deleghe_sync che diventano la riga di stato sotto il
+# nastro: durante il collegamento non ci sono fasi né documenti da contare, e senza
+# un segno di vita l'operazione sembra bloccata (soprattutto a console chiusa).
+STATI_DA_LOG = (
+    ("Carico la pagina di login", "Collegamento al portale dell'Agenzia..."),
+    ("Invio le credenziali", "Accesso in corso..."),
+    ("Login riuscito", "Accesso riuscito, preparo la sessione..."),
+    ("Configuro l'utenza di lavoro", "Scelta dell'utenza di lavoro..."),
+    ("Apro l'app di consultazione", "Apertura di Fatture e Corrispettivi..."),
+    ("Ottengo i token di servizio", "Apertura di Fatture e Corrispettivi..."),
+    ("Bootstrap portale Deleghe", "Lettura dell'elenco deleghe..."),
+)
+
+
+def stato_da_log(riga: str) -> str | None:
+    """Testo per la riga di stato se `riga` è un passo noto del collegamento."""
+    testo = (riga or "").strip()
+    for prefisso, stato in STATI_DA_LOG:
+        if testo.startswith(prefisso):
+            return stato
+    return None
+
+
 class FecGui:
 
     def __init__(self, root: tk.Tk):
@@ -1715,17 +1738,26 @@ class FecGui:
                         progresso.esito(fec_download.ESITO_ERRORE)
                     raise
 
+            def log_accesso(riga):
+                log(riga)
+                stato = stato_da_log(riga)
+                if stato:
+                    progresso.messaggio(stato)
+
             def _accedi(s, precedente):
                 creds = Creds(nomeutente=cf, pin=pin, password=pwd, cfstudio=cfst,
                               cf_cliente=s.cf, piva=s.piva, profilo=profilo)
                 # Se la P.IVA non è indicata e il CF ne ha più d'una, il popup di
                 # scelta viene mostrato (solo backend requests; browser: ignorato).
                 if precedente is None:
-                    res = autentica(creds, backend=backend, headless=headless, log=log,
-                                    scegli_piva=self._chiedi_piva_thread)
+                    progresso.messaggio("Collegamento al portale dell'Agenzia...")
+                    res = autentica(creds, backend=backend, headless=headless,
+                                    log=log_accesso, scegli_piva=self._chiedi_piva_thread)
                 else:
+                    progresso.messaggio(f"Cambio utenza: {s.nome or s.cf}...")
                     res = seleziona_utenza(precedente, creds, log=log,
                                            scegli_piva=self._chiedi_piva_thread)
+                progresso.messaggio("Accesso riuscito, avvio l'operazione...")
                 msg_piva = f", P.IVA {res.piva}" if res.piva else ""
                 if precedente is None:
                     log(f"\n✅ Login OK - backend {res.backend}{msg_piva}. Avvio operazione...")
@@ -2387,7 +2419,7 @@ class FecGui:
         capture_dir = self._materiale_dir_path()
 
         def task(log):
-            from ade_auth import cattura_har_navigazione, AuthError
+            from ade_auth import cattura_har_navigazione, AuthError, PORTALE_LOGIN_URL
             import fec_deleghe
             log(f"\n{'─' * 60}\n🎥  Cattura HAR Deleghe (navigazione libera)\n{'─' * 60}")
             try:
@@ -2395,7 +2427,7 @@ class FecGui:
                     cf, pin, pwd, capture_dir=capture_dir, prefisso="capture_deleghe",
                     hint=f"Vai su {fec_deleghe.URL_RICERCA_DELEGANTI} e clicca "
                          "«Esporta elenco».",
-                    log=log)
+                    log=log, login_url=PORTALE_LOGIN_URL)
             except AuthError as exc:
                 log(f"\n❌ Cattura fallita allo step «{exc.step}»: {exc.dettaglio}")
                 log(f"ℹ️  Una cattura parziale potrebbe comunque essere in «{self._materiale_dir_path()}».")
@@ -3128,6 +3160,9 @@ class FecGui:
 
         def log(text: str):
             self.root.after(0, self._log, text if text.endswith("\n") else text + "\n")
+            stato = stato_da_log(text)
+            if stato:
+                self.root.after(0, self.stato_var.set, stato)
 
         # Non riguarda alcun cliente delegato: serve solo ad accedere al portale
         # Deleghe come STUDIO stesso per leggere il SUO elenco deleganti. Va
@@ -3138,14 +3173,28 @@ class FecGui:
         creds = Creds(nomeutente=cf, pin=pin, password=pwd, cfstudio=cfst,
                       profilo=PROFILO_STUDIO_CASSETTO)
 
+        def stato(testo: str):
+            self.root.after(0, self.stato_var.set, testo)
+
         log(f"\n{'─' * 60}\n🔄  Sincronizza deleghe dal portale AdE\n{'─' * 60}")
+        stato("Collegamento al portale dell'Agenzia...")
         try:
             grezzi = fec_deleghe_sync.sincronizza(creds, log=log)
         except fec_deleghe_sync.PlaywrightNonDisponibile as exc:
             log(f"\n❌ {exc}")
+            stato("Sincronizzazione delle deleghe non riuscita.")
             return False
         except AuthError as exc:
             log(f"\n❌ Login fallito allo step «{exc.step}»: {exc.dettaglio}")
+            stato("Accesso non riuscito.")
+            return False
+
+        if not grezzi:
+            # Un elenco vuoto è quasi sempre un'utenza sbagliata, non uno studio senza
+            # deleghe: False, così la data dell'ultima sincronizzazione non avanza.
+            log("Nessuna delega ricevuta: anagrafica e data dell'ultima sincronizzazione "
+                "restano invariate.")
+            stato("Il portale ha restituito un elenco di deleghe vuoto.")
             return False
 
         righe = fec_deleghe_sync.elabora_deleganti(
@@ -3163,6 +3212,8 @@ class FecGui:
         self.root.after(0, self._deleghe_reload)
         log(f"Anagrafica aggiornata: {len(nuovi_cf)} deleghe nuove, "
             f"{len(righe) - len(nuovi_cf)} già note (scadenza aggiornata se cambiata).")
+        stato(f"Deleghe aggiornate: {len(nuovi_cf)} nuove, "
+              f"{len(righe) - len(nuovi_cf)} già note.")
 
         if not nuovi_cf:
             return True
@@ -4668,11 +4719,14 @@ class FecGui:
                                   cf_cliente=cfcl, piva=piva, profilo=profilo)
                     try:
                         if auth is None:
+                            progresso.messaggio("Collegamento al portale dell'Agenzia...")
                             auth = autentica(creds, backend=backend, headless=headless, log=log,
                                              scegli_piva=self._chiedi_piva_thread)
                         else:
+                            progresso.messaggio(f"Cambio utenza: {cfcl}...")
                             auth = seleziona_utenza(auth, creds, log=log,
                                                    scegli_piva=self._chiedi_piva_thread)
+                        progresso.messaggio("")
                     except AuthError as exc:
                         log(f"❌ Accesso/utenza {cfcl}: {exc.dettaglio}")
                         for _ in righe_gruppo:

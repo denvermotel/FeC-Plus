@@ -86,6 +86,12 @@ _GOTO = "https://portale.agenziaentrate.gov.it:443/PortaleWeb/home?to=FATBTB"
 SAM_LOGIN_URL = (
     f"{IAMPE}/sam/UI/Login?realm=/agenziaentrate&goto={quote(_GOTO, safe='')}"
 )
+# Stesso login con ritorno alla home del portale, senza passare dalla scelta utenza
+# di Fatture e Corrispettivi (portale Deleghe e altri servizi del portale).
+PORTALE_LOGIN_URL = (
+    f"{IAMPE}/sam/UI/Login?realm=/agenziaentrate&goto="
+    f"{quote('https://portale.agenziaentrate.gov.it:443/PortaleWeb/home', safe='')}"
+)
 
 # Entry point del servizio di consultazione (innesca il wizard di instradamento).
 CONS_WEB = f"{IVASERVIZI}/cons/cons-web/"
@@ -978,7 +984,7 @@ def _attach_network_log(page, log_path: str, log) -> None:
 def cattura_har_navigazione(nomeutente: str, pin: str, password: str,
                             capture_dir: str = "_materiale",
                             prefisso: str = "capture_debug", hint: str = "",
-                            log=print) -> tuple[str, str]:
+                            log=print, login_url: str = SAM_LOGIN_URL) -> tuple[str, str]:
     """
     Cattura HAR a navigazione libera (strumento investigativo generico, usato
     per scoprire endpoint AdE non ancora noti).
@@ -990,7 +996,9 @@ def cattura_har_navigazione(nomeutente: str, pin: str, password: str,
 
     `prefisso` distingue i file per scenario d'uso (es. "capture_deleghe"); `hint`,
     se dato, è scritto come riga guida in testa al file di log (es. l'URL da
-    raggiungere per l'investigazione in corso).
+    raggiungere per l'investigazione in corso). `login_url` è la pagina di login
+    da cui partire: di default ritorna a Fatture e Corrispettivi, con
+    `PORTALE_LOGIN_URL` alla home del portale.
 
     Differenza dalla «🎥 Cattura login» di Test Login (`_attach_network_log` sopra):
     là il browser si chiude da solo a login completato e il log filtra solo il
@@ -1074,7 +1082,7 @@ def cattura_har_navigazione(nomeutente: str, pin: str, password: str,
             context.on("page", _attach_log_completo)   # anche pagine/tab aperte dopo
 
             log("Apro la pagina di login (compilazione campi best-effort)...")
-            page.goto(SAM_LOGIN_URL, wait_until="domcontentloaded")
+            page.goto(login_url, wait_until="domcontentloaded")
             try:
                 _seleziona_tab_entratel(page, log)
                 page.fill("#username-fo-ent", nomeutente)
@@ -1279,22 +1287,13 @@ def _session_da_browser(context) -> requests.Session:
 # Backend REQUESTS (ForgeRock, best-effort)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _autentica_requests(creds: Creds, log=print, scegli_piva=None) -> AuthResult:
-    """
-    Login "solo requests" ricostruito dal traffico reale del portale:
-      1) POST {IAMPE}/api/login/telematico con JSON {username,password,pin} → cookie SSO.
-      2) bootstrap della sessione di instradamento (portale → InstradamentofcWeb/home).
-      3) wizard scelta utenza via API REST (initLight/wizardTemplate/procediWizard/
-         setUserChoice), che attiva l'utenza di lavoro.
-      4) token B2B/header (comune al backend browser).
-    """
-    s = _nuova_sessione()
-    s.headers.update({"User-Agent": _UA, "Connection": "keep-alive"})
-
-    # 1) Login via API JSON dell'AdE (sostituisce il vecchio form ForgeRock).
+def _login_telematico(s: requests.Session, creds: Creds, log, login_url: str) -> None:
+    """POST {IAMPE}/api/login/telematico con JSON {username,password,pin}: imposta i
+    cookie SSO (SIAMPE...). `login_url` è la pagina di login visitata prima, che
+    decide dove riporta il portale dopo l'accesso."""
     log("Carico la pagina di login...")
     try:
-        s.get(SAM_LOGIN_URL, verify=False, timeout=30)  # warm-up: cookie iniziali
+        s.get(login_url, verify=False, timeout=30)  # warm-up: cookie iniziali
     except requests.RequestException:
         pass
 
@@ -1303,7 +1302,7 @@ def _autentica_requests(creds: Creds, log=print, scegli_piva=None) -> AuthResult
         "Accept": "application/json, text/plain, */*",
         "Content-Type": "application/json",
         "Origin": IAMPE,
-        "Referer": SAM_LOGIN_URL,
+        "Referer": login_url,
         "User-Agent": _UA,
     }
     payload = {"username": creds.nomeutente, "password": creds.password, "pin": creds.pin}
@@ -1326,6 +1325,38 @@ def _autentica_requests(creds: Creds, log=print, scegli_piva=None) -> AuthResult
                    "nome utente non validi.",
         )
     log("Login riuscito (cookie SSO ottenuti).")
+
+
+def login_portale(creds: Creds, log=print) -> requests.Session:
+    """Login telematico che si ferma alla home del portale, senza la scelta utenza
+    di Fatture e Corrispettivi: basta ai servizi del portale come le Deleghe, ed è
+    molto più rapido di `autentica`. Ritorna la sessione; solleva AuthError.
+    L'utenza di lavoro resta la persona che accede: con la modalità studio il servizio
+    va usato dopo «Cambia utenza» sullo studio (vedi `fec_deleghe_sync._utenza_studio`)."""
+    s = _nuova_sessione()
+    s.headers.update({"User-Agent": _UA, "Connection": "keep-alive"})
+    _login_telematico(s, creds, log, PORTALE_LOGIN_URL)
+    try:
+        s.get(f"{PORTALE}/PortaleWeb/home", verify=False, timeout=30)
+    except requests.RequestException:
+        pass
+    return s
+
+
+def _autentica_requests(creds: Creds, log=print, scegli_piva=None) -> AuthResult:
+    """
+    Login "solo requests" ricostruito dal traffico reale del portale:
+      1) POST {IAMPE}/api/login/telematico con JSON {username,password,pin} → cookie SSO.
+      2) bootstrap della sessione di instradamento (portale → InstradamentofcWeb/home).
+      3) wizard scelta utenza via API REST (initLight/wizardTemplate/procediWizard/
+         setUserChoice), che attiva l'utenza di lavoro.
+      4) token B2B/header (comune al backend browser).
+    """
+    s = _nuova_sessione()
+    s.headers.update({"User-Agent": _UA, "Connection": "keep-alive"})
+
+    # 1) Login via API JSON dell'AdE (sostituisce il vecchio form ForgeRock).
+    _login_telematico(s, creds, log, SAM_LOGIN_URL)
 
     # 2) Bootstrap: lo scambio cookie SAM→portale (initPortale, anche se 501) minta i
     #    cookie SSO del portale (LtpaToken2…) necessari ad autorizzare l'instradamento.
