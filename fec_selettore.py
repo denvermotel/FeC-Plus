@@ -157,8 +157,9 @@ class SelettoreSoggetti(ttk.Frame):
                                           cursor="hand2", padx=6)
         self.pulsante_cancella.bind("<Button-1>", lambda _e: self._svuota_ricerca())
         self.pulsante_cancella.grid(row=0, column=2)
+        # Larghezza fissa: il testo cambia a ogni tasto e la ricerca non deve ballare.
         self.pulsante_tutte = ttk.Button(self.riga_ricerca, textvariable=self.testo_tutte_var,
-                                         command=self.aggiungi_tutte)
+                                         command=self.aggiungi_tutte, width=22)
         self.pulsante_tutte.grid(row=0, column=3, padx=(8, 0))
         self.pulsante_svuota = ttk.Button(self.riga_ricerca, text="Svuota", command=self.svuota)
         self.pulsante_svuota.grid(row=0, column=4, padx=(4, 0))
@@ -223,6 +224,8 @@ class SelettoreSoggetti(ttk.Frame):
         tk.Label(cornice, textvariable=self.contatore_var, bg="white", fg=_COL_TENUE,
                  anchor="e", padx=8, pady=3).grid(row=1, column=0, columnspan=2, sticky="ew")
         self.albero.bind("<Motion>", self._al_passaggio)
+        for evento in ("<MouseWheel>", "<Button-4>", "<Button-5>"):    # Windows/Mac, Linux
+            self.albero.bind(evento, self._rotella, add="+")
         self.albero.bind("<ButtonRelease-1>", self._clic)
         finestra = self.winfo_toplevel()
         finestra.bind("<Configure>", self._finestra_mossa, add="+")
@@ -241,6 +244,7 @@ class SelettoreSoggetti(ttk.Frame):
         self.info_var.set(_testo_deleghe(n))
         if self._aperta:
             self._filtra()
+        self._aggiorna_pulsante_tutte()
 
     def voci(self) -> list[str]:
         """Testi attualmente mostrati nella tendina."""
@@ -273,8 +277,11 @@ class SelettoreSoggetti(ttk.Frame):
     def aggiungi_tutte(self) -> None:
         """Tutte le deleghe, oppure, con un testo nella ricerca, solo quelle trovate."""
         testo = self.nome_var.get().strip()
+        trovate = self._trovate(testo) if testo else self._opzioni
+        if testo and not trovate:
+            return
         gia = {s.cf for s in self.scelti}
-        for nome, cf in (self._trovate(testo) if testo else self._opzioni):
+        for nome, cf in trovate:
             if cf not in gia:
                 self.scelti.append(Soggetto(nome or cf, cf, self._pive.get(cf, "")))
                 gia.add(cf)
@@ -361,6 +368,7 @@ class SelettoreSoggetti(ttk.Frame):
             self.riga_piva.grid(row=2, column=0, sticky="w", pady=(4, 0))
         else:
             self.riga_piva.grid_remove()
+        self._aggiorna_pulsante_tutte()
 
     def _doppio_clic(self, event) -> None:
         riga = self.lista.identify_row(event.y)
@@ -381,12 +389,15 @@ class SelettoreSoggetti(ttk.Frame):
 
     def _aggiorna_pulsante_tutte(self) -> None:
         testo = self.nome_var.get().strip()
+        n = len(self._trovate(testo)) if testo else len(self._opzioni)
         if not testo:
             self.testo_tutte_var.set("Aggiungi tutte")
-            return
-        n = len(self._trovate(testo))
-        self.testo_tutte_var.set("Aggiungi la trovata" if n == 1
-                                 else f"Aggiungi le {n} trovate")
+        elif n == 0:
+            self.testo_tutte_var.set("Nessuna trovata")
+        else:
+            self.testo_tutte_var.set("Aggiungi la trovata" if n == 1
+                                     else f"Aggiungi le {n} trovate")
+        self.pulsante_tutte.state(["!disabled"] if n or not testo else ["disabled"])
 
     def _svuota_ricerca(self) -> None:
         self.nome_var.set("")
@@ -527,6 +538,20 @@ class SelettoreSoggetti(ttk.Frame):
     def _esc(self, _event=None):
         self._chiudi()
         return "break"
+
+    def _rotella(self, _event) -> None:
+        # La rotella sposta le righe sotto il mouse fermo: qui l'evidenziazione deve
+        # seguirlo. L'aggiornamento aspetta lo scorrimento fatto dal Treeview.
+        self._puntatore = None
+        self.after_idle(self._evidenzia_sotto_il_mouse)
+
+    def _evidenzia_sotto_il_mouse(self) -> None:
+        try:
+            riga = self.albero.identify_row(self.winfo_pointery() - self.albero.winfo_rooty())
+        except tk.TclError:
+            return
+        if riga:
+            self._evidenzia(int(riga))
 
     def _al_passaggio(self, event) -> None:
         # Quando le frecce fanno scorrere la tendina sotto un mouse fermo, Windows manda un

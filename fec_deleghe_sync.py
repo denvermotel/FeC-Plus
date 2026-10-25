@@ -123,8 +123,13 @@ def _x_appl(risposta, precedente: str) -> str:
 
 
 class SincronizzazioneBloccata(RuntimeError):
-    """Il fetch via requests è stato rifiutato (probabile blocco anti-bot Akamai
-    sul dominio apptel/portale-rest) o ha risposto in una forma inattesa."""
+    """Una chiamata al portale è stata rifiutata (per esempio x-appl scaduto) o ha
+    risposto in una forma inattesa."""
+
+
+class UtenzaStudioNonAttiva(SincronizzazioneBloccata):
+    """Il cambio dell'utenza di lavoro sullo studio è stato rifiutato o non ha avuto
+    effetto. Il backend browser non lo risolverebbe: niente ripiego."""
 
 
 def _bootstrap_portale(session: requests.Session, log) -> str:
@@ -147,26 +152,40 @@ def _bootstrap_portale(session: requests.Session, log) -> str:
 def _utenza_studio(session: requests.Session, cf_studio: str, x_appl: str, log) -> str:
     """Porta l'utenza di lavoro del portale sullo studio, come «Cambia utenza»: dopo
     il login è la persona che accede, e per lei l'elenco deleganti è vuoto. Ritorna
-    l'x-appl aggiornato. Senza `cf_studio`, o se non è tra gli incarichi, resta
-    sull'utenza personale."""
+    l'x-appl aggiornato. Senza `cf_studio`, se lo studio è la persona stessa o se non
+    è tra gli incarichi, resta sull'utenza personale. Solleva `SincronizzazioneBloccata`
+    se listaIncarichi non è leggibile, `UtenzaStudioNonAttiva` se il cambio, verificato
+    con infouser, non riesce."""
     cf_studio = (cf_studio or "").strip().upper()
     if not cf_studio:
         return x_appl
     r = session.get(f"{PORTALE}/portale-rest/rs/listaIncarichi?v={_unix_time()}",
                     headers=_headers_apptel(x_appl), verify=False, timeout=_HTTP_TIMEOUT)
-    x_appl = _x_appl(r, x_appl)
+    # Una risposta rifiutata o illeggibile non dice nulla sugli incarichi: trattarla
+    # come «studio non trovato» manderebbe l'utente a correggere un CF giusto.
+    if r.status_code != 200:
+        raise SincronizzazioneBloccata(
+            f"Il portale ha risposto HTTP {r.status_code} a listaIncarichi.")
     try:
-        incarichi = (r.json() or {}).get("listaIncarichi") or []
-    except ValueError:
-        incarichi = []
-    chiave = next((str(i.get("chiave", "")) for i in incarichi
-                   if str(i.get("codicefiscale", "")).strip().upper() == cf_studio), "")
-    if not chiave:
+        dati = r.json()
+    except ValueError as exc:
+        raise SincronizzazioneBloccata("listaIncarichi: risposta non in formato JSON.") from exc
+    if not isinstance(dati, dict):
+        raise SincronizzazioneBloccata("listaIncarichi: risposta in una forma inattesa.")
+    x_appl = _x_appl(r, x_appl)
+    incarichi = [i for i in (dati.get("listaIncarichi") or [])
+                 if isinstance(i, dict) and str(i.get("chiave", "")).strip()]
+    dello_studio = [i for i in incarichi
+                    if str(i.get("codicefiscale", "")).strip().upper() == cf_studio]
+    if not dello_studio:
         log(f"⚠️  Lo studio {cf_studio} non è tra gli incarichi dell'utente: resto "
             "sull'utenza personale.")
         return x_appl
-    if chiave.upper() == cf_studio:      # lo studio è l'utente stesso: niente da cambiare
+    # Lo studio è l'utente stesso («Me stesso»): niente da cambiare.
+    if any(str(i.get("chiave", "")).strip().upper() == cf_studio for i in dello_studio):
         return x_appl
+    attivi = [i for i in dello_studio if str(i.get("stato", "")) == "1"]
+    chiave = str((attivi or dello_studio)[0].get("chiave", ""))
     r = session.post(f"{PORTALE}/portale-rest/rs/cambiautenza?v={_unix_time()}",
                      headers=_headers_apptel(x_appl),
                      data=json.dumps({"chiave": chiave, "typeRole": "2"}),
@@ -174,14 +193,39 @@ def _utenza_studio(session: requests.Session, cf_studio: str, x_appl: str, log) 
     # Il portale risponde 409 anche quando il cambio riesce (verificato dalle
     # infouser successive in una cattura reale).
     if r.status_code not in (200, 204, 409):
-        raise SincronizzazioneBloccata(
+        raise UtenzaStudioNonAttiva(
             f"Cambio dell'utenza di lavoro sullo studio {cf_studio} rifiutato "
             f"(HTTP {r.status_code}).")
     x_appl = _x_appl(r, x_appl)
+    _verifica_utenza_studio(session, cf_studio, x_appl, log)
     r = session.get(f"{PORTALE}/portale-rest/rs/initPortale?v={_unix_time()}",
                     headers=_headers_apptel(x_appl), verify=False, timeout=_HTTP_TIMEOUT)
     log(f"Utenza di lavoro: studio {cf_studio}.")
     return _x_appl(r, x_appl)
+
+
+def _verifica_utenza_studio(session: requests.Session, cf_studio: str, x_appl: str,
+                            log) -> None:
+    """Dopo «Cambia utenza» controlla con infouser che l'utenza di lavoro sia lo studio:
+    il 409 che il portale restituisce non distingue un cambio riuscito da uno fallito.
+    Se infouser non è leggibile si prosegue (lo dirà l'elenco), con un avviso."""
+    try:
+        r = session.get(f"{PORTALE}/portale-rest/rs/infouser?v={_unix_time()}",
+                        headers=_headers_apptel(x_appl), verify=False,
+                        timeout=_HTTP_TIMEOUT)
+        dati = r.json() if r.status_code == 200 else None
+    except (requests.RequestException, ValueError):
+        dati = None
+    # Senza utenzaAutenticata non è la risposta attesa: non prova un cambio fallito.
+    if not isinstance(dati, dict) or "utenzaAutenticata" not in dati:
+        log("⚠️  Non è stato possibile verificare il cambio dell'utenza di lavoro.")
+        return
+    di_lavoro = dati.get("utenzaDiLavoro")
+    cf = (str(di_lavoro.get("codiceFiscale", "")) if isinstance(di_lavoro, dict) else "")
+    if cf.strip().upper() != cf_studio:
+        raise UtenzaStudioNonAttiva(
+            f"Il cambio dell'utenza di lavoro sullo studio {cf_studio} non è riuscito "
+            f"(utenza di lavoro attuale: {cf.strip() or 'la persona che accede'}).")
 
 
 def fetch_deleganti_raw(auth, *, cf_studio: str = "", log=print) -> list[dict]:
@@ -248,7 +292,8 @@ def sincronizza(creds, *, log=print, forza_browser: bool = False) -> list[dict]:
 
     Solleva `ade_auth.AuthError` se il login fallisce (con entrambi i tentativi),
     `PlaywrightNonDisponibile` se il tentativo requests fallisce e Playwright non
-    è installato.
+    è installato, `UtenzaStudioNonAttiva` subito se il cambio utenza sullo studio non
+    riesce, `SincronizzazioneBloccata` se anche il backend browser viene rifiutato.
     """
     import ade_auth
     import fec_deps
@@ -262,15 +307,20 @@ def sincronizza(creds, *, log=print, forza_browser: bool = False) -> list[dict]:
             sessione = ade_auth.login_portale(creds, log=log)
             return fetch_deleganti_raw(SimpleNamespace(session=sessione),
                                        cf_studio=cf_studio, log=log)
+        except UtenzaStudioNonAttiva:
+            raise
         except (SincronizzazioneBloccata, ade_auth.AuthError) as exc:
             log(f"Backend requests non utilizzabile: {exc}")
+            causa = str(exc)
+    else:
+        causa = ""
 
     mancanti = fec_deps.find_missing().get("browser", [])
     if mancanti:
         raise PlaywrightNonDisponibile(
-            "Il portale Deleghe ha bloccato il tentativo leggero e Playwright "
-            f"non è installato ({', '.join(mancanti)}): installa Playwright per "
-            "usare questa funzione, oppure importa le deleghe dal CSV manuale.")
+            f"Tentativo leggero non riuscito ({causa or 'motivo non disponibile'}) e "
+            f"Playwright non è installato ({', '.join(mancanti)}) per riprovare con il "
+            "browser. Importa le deleghe dal CSV manuale.")
 
     log("Riprovo con il backend browser (Playwright)...")
     auth = ade_auth.autentica(creds, backend="browser", headless=True, log=log)

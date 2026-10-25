@@ -4,6 +4,7 @@
 """La finestra esegue un'operazione su più soggetti con un solo accesso."""
 
 import os
+import re
 import sys
 import unittest
 from types import SimpleNamespace
@@ -75,7 +76,8 @@ class TestEseguiPerSoggetti(AppGuiCase):
             with open(os.path.join(radice, nome), encoding="utf-8") as fh:
                 sorgente += fh.read()
         for prefisso, _stato in fec_gui.STATI_DA_LOG:
-            self.assertIn(prefisso, sorgente)
+            self.assertRegex(sorgente, r'\blog\(f?"' + re.escape(prefisso),
+                             f"nessuna riga di log che inizi con «{prefisso}»")
         self.assertEqual(fec_gui.stato_da_log("  Login riuscito (cookie SSO ottenuti)."),
                          "Accesso riuscito, preparo la sessione...")
         self.assertIsNone(fec_gui.stato_da_log("Scarico IT01234567890_00001.xml"))

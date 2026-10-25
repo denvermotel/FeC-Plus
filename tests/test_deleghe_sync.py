@@ -169,6 +169,9 @@ class TestFetchDelegantiRaw(unittest.TestCase):
             ]}, headers={"x-appl": "INC"}),
             "rs/cambiautenza": _RispostaFinta(cambio_status, text="",
                                               headers={"x-appl": "CAMBIO"}),
+            "rs/infouser": _RispostaFinta(200, {
+                "utenzaAutenticata": {"codiceFiscale": "RSSMRA80A01H501U"},
+                "utenzaDiLavoro": {"codiceFiscale": "01234567890", "chiaveUtenza": "T0000001"}}),
             "initPortale": _RispostaFinta(200, text="{}", headers={"x-appl": "AAA"}),
             "initLight": _RispostaFinta(200, text=""),
             "delegheUniche/deleganti": _RispostaFinta(200, {"lista": [{"cfDelegante": "X"}]}),
@@ -215,6 +218,140 @@ class TestFetchDelegantiRaw(unittest.TestCase):
         sync.fetch_deleganti_raw(auth, log=lambda _m: None)
         self.assertFalse(any("listaIncarichi" in c.args[0]
                              for c in auth.session.get.call_args_list))
+
+    def test_lista_incarichi_rifiutata_non_incolpa_il_cf_studio(self):
+        # Un 403 su listaIncarichi (per esempio x-appl scaduto) non significa che lo
+        # studio non sia tra gli incarichi: errore vero, così parte il ripiego.
+        risposte = self._risposte_con_incarichi()
+        risposte["listaIncarichi"] = _RispostaFinta(403, text="<H1>Access Denied</H1>")
+        righe = []
+        with self.assertRaises(sync.SincronizzazioneBloccata) as ctx:
+            sync.fetch_deleganti_raw(self._auth_finto(risposte), cf_studio="01234567890",
+                                     log=righe.append)
+        self.assertIn("listaIncarichi", str(ctx.exception))
+        self.assertIn("403", str(ctx.exception))
+        self.assertFalse(any("non è tra gli incarichi" in r for r in righe))
+
+    def test_lista_incarichi_json_non_dizionario_errore_gestito(self):
+        risposte = self._risposte_con_incarichi()
+        risposte["listaIncarichi"] = _RispostaFinta(200, ["inatteso"])
+        with self.assertRaises(sync.SincronizzazioneBloccata):
+            sync.fetch_deleganti_raw(self._auth_finto(risposte), cf_studio="01234567890",
+                                     log=lambda _m: None)
+
+    def test_voci_non_dizionario_ignorate(self):
+        risposte = self._risposte_con_incarichi()
+        risposte["listaIncarichi"] = _RispostaFinta(200, {"listaIncarichi": [
+            "rotta", {"chiave": "T0000001", "codicefiscale": "01234567890", "stato": "1"}]})
+        auth = self._auth_finto(risposte)
+        sync.fetch_deleganti_raw(auth, cf_studio="01234567890", log=lambda _m: None)
+        post = [c for c in auth.session.post.call_args_list if "rs/cambiautenza" in c.args[0]]
+        self.assertEqual(json.loads(post[0].kwargs["data"])["chiave"], "T0000001")
+
+    def test_preferisce_l_incarico_attivo(self):
+        risposte = self._risposte_con_incarichi()
+        risposte["listaIncarichi"] = _RispostaFinta(200, {"listaIncarichi": [
+            {"chiave": "T0000009", "codicefiscale": "01234567890", "stato": "0"},
+            {"chiave": "T0000001", "codicefiscale": "01234567890", "stato": "1"}]})
+        auth = self._auth_finto(risposte)
+        sync.fetch_deleganti_raw(auth, cf_studio="01234567890", log=lambda _m: None)
+        post = [c for c in auth.session.post.call_args_list if "rs/cambiautenza" in c.args[0]]
+        self.assertEqual(json.loads(post[0].kwargs["data"])["chiave"], "T0000001")
+
+    def test_studio_uguale_alla_persona_nessun_cambio(self):
+        # «Me stesso»: la voce con chiave uguale al CF vince anche se esiste un
+        # incarico T... sullo stesso CF.
+        risposte = self._risposte_con_incarichi()
+        risposte["listaIncarichi"] = _RispostaFinta(200, {"listaIncarichi": [
+            {"chiave": "T0000005", "codicefiscale": "RSSMRA80A01H501U", "stato": "1"},
+            {"chiave": "RSSMRA80A01H501U", "codicefiscale": "RSSMRA80A01H501U",
+             "sede": "FOL"}]})
+        auth = self._auth_finto(risposte)
+        sync.fetch_deleganti_raw(auth, cf_studio="RSSMRA80A01H501U", log=lambda _m: None)
+        self.assertFalse(any("rs/cambiautenza" in c.args[0]
+                             for c in auth.session.post.call_args_list))
+
+    def test_x_appl_del_cambio_arriva_alle_deleghe(self):
+        risposte = self._risposte_con_incarichi()
+        valori = iter(["AAA", "DOPO_CAMBIO"])
+        auth = self._auth_finto(risposte)
+        originale = auth.session.get.side_effect
+
+        def get(url, **kw):
+            if "initPortale" in url:
+                return _RispostaFinta(200, text="{}", headers={"x-appl": next(valori)})
+            return originale(url, **kw)
+        auth.session.get.side_effect = get
+        sync.fetch_deleganti_raw(auth, cf_studio="01234567890", log=lambda _m: None)
+        self.assertEqual(self._x_appl_inviato(auth, "get", "listaIncarichi"), "AAA")
+        self.assertEqual(self._x_appl_inviato(auth, "post", "rs/cambiautenza"), "INC")
+        self.assertEqual(self._x_appl_inviato(auth, "get", "initLight"), "DOPO_CAMBIO")
+        self.assertEqual(self._x_appl_inviato(auth, "post", "delegheUniche/deleganti"),
+                         "DOPO_CAMBIO")
+
+    def test_infouser_senza_utenza_autenticata_non_blocca(self):
+        # Un 200 che non è la risposta attesa (un dizionario di errore) non prova che
+        # il cambio sia fallito: si prosegue con l'avviso.
+        risposte = self._risposte_con_incarichi()
+        risposte["rs/infouser"] = _RispostaFinta(200, {"errore": "boh"})
+        righe = []
+        lista = sync.fetch_deleganti_raw(self._auth_finto(risposte), cf_studio="01234567890",
+                                         log=righe.append)
+        self.assertEqual(lista, [{"cfDelegante": "X"}])
+        self.assertTrue(any("verific" in r for r in righe))
+
+    def test_voce_dello_studio_senza_chiave_scartata(self):
+        risposte = self._risposte_con_incarichi()
+        risposte["listaIncarichi"] = _RispostaFinta(200, {"listaIncarichi": [
+            {"codicefiscale": "01234567890", "stato": "1"},
+            {"chiave": "T0000001", "codicefiscale": "01234567890", "stato": "0"}]})
+        auth = self._auth_finto(risposte)
+        sync.fetch_deleganti_raw(auth, cf_studio="01234567890", log=lambda _m: None)
+        post = [c for c in auth.session.post.call_args_list if "rs/cambiautenza" in c.args[0]]
+        self.assertEqual(json.loads(post[0].kwargs["data"])["chiave"], "T0000001")
+
+    def test_errore_di_utenza_e_un_tipo_dedicato(self):
+        risposte = self._risposte_con_incarichi()
+        risposte["rs/infouser"] = _RispostaFinta(200, {
+            "utenzaAutenticata": {"codiceFiscale": "RSSMRA80A01H501U"}})
+        with self.assertRaises(sync.UtenzaStudioNonAttiva):
+            sync.fetch_deleganti_raw(self._auth_finto(risposte), cf_studio="01234567890",
+                                     log=lambda _m: None)
+
+    def test_cambio_non_riuscito_nonostante_il_409(self):
+        # Il 409 non dice se il cambio è riuscito: lo dice infouser.
+        risposte = self._risposte_con_incarichi()
+        risposte["rs/infouser"] = _RispostaFinta(200, {
+            "utenzaAutenticata": {"codiceFiscale": "RSSMRA80A01H501U"}})
+        with self.assertRaises(sync.SincronizzazioneBloccata) as ctx:
+            sync.fetch_deleganti_raw(self._auth_finto(risposte), cf_studio="01234567890",
+                                     log=lambda _m: None)
+        self.assertIn("01234567890", str(ctx.exception))
+
+    def test_utenza_di_lavoro_diversa_dallo_studio(self):
+        risposte = self._risposte_con_incarichi()
+        risposte["rs/infouser"] = _RispostaFinta(200, {
+            "utenzaAutenticata": {"codiceFiscale": "RSSMRA80A01H501U"},
+            "utenzaDiLavoro": {"codiceFiscale": "99999999999"}})
+        with self.assertRaises(sync.SincronizzazioneBloccata):
+            sync.fetch_deleganti_raw(self._auth_finto(risposte), cf_studio="01234567890",
+                                     log=lambda _m: None)
+
+    def test_infouser_illeggibile_non_blocca(self):
+        # La verifica è un controllo in più: se infouser non risponde come atteso si
+        # prosegue (lo dirà comunque l'elenco), con un avviso nel log.
+        risposte = self._risposte_con_incarichi()
+        risposte["rs/infouser"] = _RispostaFinta(500, text="errore")
+        righe = []
+        lista = sync.fetch_deleganti_raw(self._auth_finto(risposte), cf_studio="01234567890",
+                                         log=righe.append)
+        self.assertEqual(lista, [{"cfDelegante": "X"}])
+        self.assertTrue(any("verific" in r for r in righe))
+
+    def test_infouser_usa_l_x_appl_del_cambio(self):
+        auth = self._auth_finto(self._risposte_con_incarichi())
+        sync.fetch_deleganti_raw(auth, cf_studio="01234567890", log=lambda _m: None)
+        self.assertEqual(self._x_appl_inviato(auth, "get", "rs/infouser"), "CAMBIO")
 
     def test_403_dice_quale_chiamata_ha_rifiutato(self):
         auth = self._auth_finto({
@@ -317,6 +454,35 @@ class TestSincronizza(unittest.TestCase):
     @patch("fec_deleghe_sync.fetch_deleganti_raw")
     @patch("ade_auth.autentica")
     @patch("ade_auth.login_portale")
+    def test_utenza_studio_non_attiva_non_passa_dal_browser(
+            self, mock_login, mock_autentica, mock_fetch, mock_missing):
+        # Il browser non risolverebbe un cambio utenza rifiutato, e nell'exe senza
+        # Playwright il messaggio diventerebbe un fuorviante «installa Playwright».
+        mock_missing.return_value = {"browser": ["playwright"]}
+        mock_fetch.side_effect = sync.UtenzaStudioNonAttiva("cambio non riuscito")
+
+        with self.assertRaises(sync.UtenzaStudioNonAttiva):
+            sync.sincronizza(MagicMock(cfstudio="01234567890"), log=lambda _m: None)
+        mock_autentica.assert_not_called()
+        mock_missing.assert_not_called()
+
+    @patch("fec_deps.find_missing")
+    @patch("fec_deleghe_sync.fetch_deleganti_raw")
+    @patch("ade_auth.autentica")
+    @patch("ade_auth.login_portale")
+    def test_playwright_non_disponibile_dice_la_causa_del_primo_tentativo(
+            self, mock_login, mock_autentica, mock_fetch, mock_missing):
+        mock_missing.return_value = {"browser": ["playwright"]}
+        mock_fetch.side_effect = sync.SincronizzazioneBloccata("HTTP 403 a listaIncarichi")
+
+        with self.assertRaises(sync.PlaywrightNonDisponibile) as ctx:
+            sync.sincronizza(MagicMock(), log=lambda _m: None)
+        self.assertIn("HTTP 403 a listaIncarichi", str(ctx.exception))
+
+    @patch("fec_deps.find_missing")
+    @patch("fec_deleghe_sync.fetch_deleganti_raw")
+    @patch("ade_auth.autentica")
+    @patch("ade_auth.login_portale")
     def test_playwright_non_disponibile_se_requests_fallisce_e_manca_browser(
             self, mock_login, mock_autentica, mock_fetch, mock_missing):
         mock_missing.return_value = {"browser": ["playwright"]}  # NON installato
@@ -393,7 +559,9 @@ class TestLoginPortale(unittest.TestCase):
         s.get.return_value = _RispostaFinta(200, text="")
         return s, ade_auth
 
-    def test_login_poi_home_del_portale(self):
+    def test_solo_login_la_home_la_visita_chi_usa_il_portale(self):
+        # La home del portale la apre il bootstrap del servizio: visitarla anche qui
+        # sarebbe una richiesta doppia.
         s, ade_auth = self._sessione()
         with patch.object(ade_auth, "_nuova_sessione", return_value=s):
             risultato = ade_auth.login_portale(MagicMock(nomeutente="U", password="P",
@@ -401,9 +569,7 @@ class TestLoginPortale(unittest.TestCase):
         self.assertIs(risultato, s)
         self.assertEqual(s.post.call_args.args[0], ade_auth.LOGIN_API)
         url = [c.args[0] for c in s.get.call_args_list]
-        self.assertIn(ade_auth.PORTALE_LOGIN_URL, url)
-        self.assertTrue(any(u.endswith("/PortaleWeb/home") for u in url))
-        self.assertFalse(any("FATBTB" in u or "ivaservizi" in u for u in url))
+        self.assertEqual(url, [ade_auth.PORTALE_LOGIN_URL])
 
     def test_credenziali_rifiutate_autherror(self):
         s, ade_auth = self._sessione(login_ok=False)

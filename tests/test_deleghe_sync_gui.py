@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Test di FecGui._deleghe_controlla_canali_nuovi, in isolamento dal resto
-della GUI (stesso approccio di test_nastro.py/test_progresso.py)."""
+"""Sincronizzazione delle deleghe dal portale e controllo dei canali delle deleghe
+nuove, sulla finestra protetta di `AppGuiCase` (dati reali con sha256, salvataggi
+neutralizzati, compreso `fec_deleghe.save_deleghe`)."""
 
 import os
 import sys
-import tkinter as tk
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -13,44 +13,23 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import fec_download
-import fec_gui
-from _appgui import distruggi_root
+from _appgui import AppGuiCase
+
+_RIGA_A = {"codice_fiscale": "AAA", "denominazione": "Cliente A",
+           "partita_iva": "", "data_fine_delega": "", "conservazione": False,
+           "codice_destinatario": "", "pec": "", "canale_massivo": "",
+           "etichetta1": "", "etichetta2": ""}
 
 
-def _tk_disponibile() -> bool:
-    try:
-        r = tk.Tk()
-        r.destroy()
-        return True
-    except tk.TclError:
-        return False
-
-
-@unittest.skipUnless(_tk_disponibile(), "richiede un display Tk")
-class TestDelegheControllaCanaliNuovi(unittest.TestCase):
+class TestDelegheControllaCanaliNuovi(AppGuiCase):
     def setUp(self):
-        self.root = tk.Tk()
-        self.root.withdraw()
-        self.app = fec_gui.FecGui(self.root)
-        # Mai toccare fec_deleghe.json reale: mock esplicito, come richiesto
-        # dalle regole del progetto per ogni test che arriva a save_deleghe.
-        self._patch_save = patch.object(self.app._deleghe, "save_deleghe")
-        self._patch_save.start()
+        super().setUp()
         # In produzione self.control viene creato dal chiamante (il dialogo di
         # sincronizzazione da portale, sul thread Tk) prima di lanciare il
         # worker, come per le altre operazioni in-process con pausa/interrompi;
         # qui lo simuliamo direttamente.
         self.app.control = fec_download.Controllo()
-        self.app.deleghe_rows = [
-            {"codice_fiscale": "AAA", "denominazione": "Cliente A",
-            "partita_iva": "", "data_fine_delega": "", "conservazione": False,
-            "codice_destinatario": "", "pec": "", "canale_massivo": "",
-            "etichetta1": "", "etichetta2": ""},
-        ]
-
-    def tearDown(self):
-        self._patch_save.stop()
-        distruggi_root(self.root)
+        self.app.deleghe_rows = [dict(_RIGA_A)]
 
     @patch("fec_anagrafica.recupera")
     @patch("ade_auth.seleziona_utenza")
@@ -106,24 +85,10 @@ class TestDelegheControllaCanaliNuovi(unittest.TestCase):
         self.assertEqual(riga_b["codice_destinatario"], "XYZ9999")
 
 
-@unittest.skipUnless(_tk_disponibile(), "richiede un display Tk")
-class TestDelegheSincronizzaDaPortale(unittest.TestCase):
+class TestDelegheSincronizzaDaPortale(AppGuiCase):
     def setUp(self):
-        self.root = tk.Tk()
-        self.root.withdraw()
-        self.app = fec_gui.FecGui(self.root)
-        self._patch_save = patch.object(self.app._deleghe, "save_deleghe")
-        self._patch_save.start()
-        self.app.deleghe_rows = [
-            {"codice_fiscale": "AAA", "denominazione": "Cliente A",
-            "partita_iva": "", "data_fine_delega": "", "conservazione": False,
-            "codice_destinatario": "", "pec": "", "canale_massivo": "",
-            "etichetta1": "", "etichetta2": ""},
-        ]
-
-    def tearDown(self):
-        self._patch_save.stop()
-        distruggi_root(self.root)
+        super().setUp()
+        self.app.deleghe_rows = [dict(_RIGA_A)]
 
     @patch("fec_gui.messagebox.askyesno", return_value=False)
     @patch("fec_deleghe_sync.sincronizza")
@@ -238,6 +203,28 @@ class TestDelegheSincronizzaDaPortale(unittest.TestCase):
         self.assertEqual(visti, ["Accesso in corso..."])
         self.root.update()
         self.assertEqual(self.app.stato_var.get(), "Deleghe aggiornate: 0 nuove, 1 già note.")
+
+    @patch("fec_deleghe_sync.sincronizza")
+    def test_portale_che_rifiuta_ritorna_false_e_lo_dice(self, mock_sync):
+        import fec_deleghe_sync
+        mock_sync.side_effect = fec_deleghe_sync.SincronizzazioneBloccata("HTTP 403")
+        self.app._get_creds = MagicMock(return_value=("cf", "pin", "pwd", "cfst"))
+        self.app._mostra_errore = MagicMock()
+
+        esito = self.app._deleghe_sincronizza_da_portale(soglia_data="", forza_tutte=False)
+
+        self.assertFalse(esito)
+        self.root.update()
+        self.assertEqual(self.app.stato_var.get(), "Sincronizzazione delle deleghe non riuscita.")
+        self.app._mostra_errore.assert_called_once()
+
+    @patch("fec_deleghe_sync.sincronizza", side_effect=RuntimeError("imprevisto"))
+    def test_errore_imprevisto_aggiorna_la_barra_e_rilancia(self, mock_sync):
+        self.app._get_creds = MagicMock(return_value=("cf", "pin", "pwd", "cfst"))
+        with self.assertRaises(RuntimeError):
+            self.app._deleghe_sincronizza_da_portale(soglia_data="", forza_tutte=False)
+        self.root.update()
+        self.assertEqual(self.app.stato_var.get(), "Sincronizzazione delle deleghe non riuscita.")
 
     @patch("fec_deleghe_sync.sincronizza", return_value=[])
     def test_elenco_vuoto_non_fa_avanzare_la_data(self, mock_sync):

@@ -227,6 +227,43 @@ class TestWidget(unittest.TestCase):
         self.assertFalse(self.s.aperta())
         self.assertEqual(self.s.pulsante_tutte.cget("text"), "Aggiungi tutte")
 
+    def test_pulsante_aggiornato_quando_cambiano_i_scelti(self):
+        self.s.nome_var.set("nord")
+        self.s.aggiungi("Verdi Luigi", "VRDLGI70B02F205X")
+        self.assertEqual(self.s.pulsante_tutte.cget("text"), "Aggiungi la trovata")
+        self.s.svuota()
+        self.assertEqual(self.s.pulsante_tutte.cget("text"), "Aggiungi le 2 trovate")
+
+    def test_pulsante_disattivato_senza_trovate(self):
+        self.s.nome_var.set("nessunacorrispondenza")
+        self.assertTrue(self.s.pulsante_tutte.instate(["disabled"]))
+        self.assertEqual(self.s.pulsante_tutte.cget("text"), "Nessuna trovata")
+        self.s.aggiungi_tutte()
+        self.assertEqual(self.s.nome_var.get(), "nessunacorrispondenza")
+        self.assertEqual(self.s.scelti, [])
+        self.s.nome_var.set("")
+        self.assertFalse(self.s.pulsante_tutte.instate(["disabled"]))
+
+    def test_pulsante_dopo_aggiorna_delle_deleghe(self):
+        self.s.nome_var.set("nord")
+        self.s.aggiorna(ROWS[:2])
+        self.assertEqual(self.s.pulsante_tutte.cget("text"), "Aggiungi la trovata")
+
+    def test_dopo_la_rotella_evidenzia_la_riga_sotto_il_mouse(self):
+        # La rotella sposta le righe sotto un mouse fermo: qui l'evidenziazione deve
+        # seguire il mouse, a differenza dello scorrimento con le frecce.
+        self.s.nome_var.set("i")
+        self.s._filtra()
+        self.s._puntatore = (500, 500)
+        with patch.object(self.s, "winfo_pointery", return_value=120), \
+                patch.object(self.s.albero, "winfo_rooty", return_value=100), \
+                patch.object(self.s.albero, "identify_row", return_value="2") as riga:
+            self.s._rotella(None)
+            self.root.update()
+        self.assertIsNone(self.s._puntatore)
+        self.assertEqual(self.s._evid, 2)
+        riga.assert_called_with(20)
+
     def test_frecce_non_disturbate_dal_mouse_fermo(self):
         # Con il mouse fermo sopra la tendina, lo scorrimento da tastiera fa arrivare un
         # <Motion> con le stesse coordinate: non deve spostare la riga evidenziata.

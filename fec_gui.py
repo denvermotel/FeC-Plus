@@ -3149,7 +3149,8 @@ class FecGui:
         Va chiamato da un worker thread (self._run_inprocess).
 
         Ritorna True se ha raggiunto almeno il merge/salvataggio dell'anagrafica,
-        False se e' tornata prima (Playwright non disponibile o login fallito):
+        False se e' tornata prima (Playwright non disponibile, login fallito, portale
+        che rifiuta le chiamate o elenco vuoto):
         il chiamante usa questo esito per decidere se avanzare la soglia
         `deleghe_sync_ultima_data`, altrimenti si perderebbe silenziosamente la
         prossima volta la finestra di deleghe non ancora sincronizzate.
@@ -3188,6 +3189,17 @@ class FecGui:
             log(f"\n❌ Login fallito allo step «{exc.step}»: {exc.dettaglio}")
             stato("Accesso non riuscito.")
             return False
+        except fec_deleghe_sync.SincronizzazioneBloccata as exc:
+            log(f"\n❌ {exc}")
+            stato("Sincronizzazione delle deleghe non riuscita.")
+            self.root.after(0, self._mostra_errore,
+                            "Sincronizzazione deleghe non riuscita", str(exc))
+            return False
+        except Exception:
+            # Il popup lo mostra _run_inprocess; qui solo la barra, che altrimenti
+            # resterebbe sull'ultimo passo del collegamento.
+            stato("Sincronizzazione delle deleghe non riuscita.")
+            raise
 
         if not grezzi:
             # Un elenco vuoto è quasi sempre un'utenza sbagliata, non uno studio senza

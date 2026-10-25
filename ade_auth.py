@@ -1328,18 +1328,15 @@ def _login_telematico(s: requests.Session, creds: Creds, log, login_url: str) ->
 
 
 def login_portale(creds: Creds, log=print) -> requests.Session:
-    """Login telematico che si ferma alla home del portale, senza la scelta utenza
-    di Fatture e Corrispettivi: basta ai servizi del portale come le Deleghe, ed è
-    molto più rapido di `autentica`. Ritorna la sessione; solleva AuthError.
+    """Solo login telematico, con ritorno alla home del portale e senza la scelta
+    utenza di Fatture e Corrispettivi: basta ai servizi del portale come le Deleghe, ed
+    è molto più rapido di `autentica`. La home e `initPortale` li apre chi usa il
+    servizio. Ritorna la sessione; solleva AuthError.
     L'utenza di lavoro resta la persona che accede: con la modalità studio il servizio
     va usato dopo «Cambia utenza» sullo studio (vedi `fec_deleghe_sync._utenza_studio`)."""
     s = _nuova_sessione()
     s.headers.update({"User-Agent": _UA, "Connection": "keep-alive"})
     _login_telematico(s, creds, log, PORTALE_LOGIN_URL)
-    try:
-        s.get(f"{PORTALE}/PortaleWeb/home", verify=False, timeout=30)
-    except requests.RequestException:
-        pass
     return s
 
 
