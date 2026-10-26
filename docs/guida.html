@@ -85,6 +85,12 @@ playwright install chromium</code></pre>
       <h3>Metadati delle fatture</h3>
       <p class="sub">Nella scheda <strong>Download Standard</strong> la casella <strong>«Scarica anche i metadati delle fatture»</strong> è accesa di default: accanto a ogni fattura viene salvato il file dei metadati (<code>_metadato.xml</code>). Spegnendola si scaricano solo le fatture e l'operazione è più rapida. Da riga di comando corrisponde a <code>--senza-metadati</code>.</p>
 
+      <h3>Ritenuta d'acconto</h3>
+      <ul>
+        <li>In <strong>Download Standard</strong> la casella <strong>«Scarica solo fatture e parcelle con ritenuta d'acconto»</strong> salva solo i documenti che hanno la ritenuta (emessi e ricevuti). Il portale la riporta solo dentro il file della fattura: ogni file viene comunque scaricato per controllarlo, e gli altri risultano «saltati». Un file firmato che non si riesce ad aprire viene salvato lo stesso, con un avviso (per aprire i file firmati serve il pacchetto «asn1crypto»). Le <strong>messe a disposizione</strong> si salvano sempre tutte: scaricarne il file ne registra la presa visione, e scaricarle per poi scartarle fisserebbe la ricezione di documenti che non restano in cartella. Da riga di comando: <code>--solo-ritenuta</code>.</li>
+        <li>In <strong>Utility</strong>, con il formato Excel, la casella <strong>«Includi ritenuta d'acconto»</strong> aggiunge le colonne tipo, percentuale e importo della ritenuta (importo sommato nei totali) ed evidenzia le fatture che ne hanno una; in rosa le righe il cui file non si è potuto scaricare o leggere. Scarica il file di ogni fattura, quindi l'elenco richiede più tempo. Con il formato CSV la casella è disattivata: il CSV riproduce il file del portale.</li>
+      </ul>
+
       <h3>Cartelle di download (Impostazioni)</h3>
       <p class="sub">In <strong>⚙ Impostazioni</strong> si imposta la cartella di download di default e, se serve, una cartella diversa per ogni tipo di documento.</p>
       <ul>
@@ -139,6 +145,7 @@ playwright install chromium</code></pre>
         <tr><td><code>--no-anno</code></td><td>Con <code>--cartelle ditta</code>, niente sottocartella per anno.</td></tr>
         <tr><td><code>--csv-ade</code></td><td>Genera anche il CSV dell'elenco nel formato «Esporta la tabella» del portale (solo comandi di download).</td></tr>
         <tr><td><code>--senza-metadati</code></td><td>Non scarica il file dei metadati di ogni fattura (solo comandi di download delle fatture).</td></tr>
+        <tr><td><code>--solo-ritenuta</code></td><td>Salva solo le fatture e le parcelle con ritenuta d'acconto (solo comandi di download delle fatture).</td></tr>
         <tr><td><code>--dry-run</code></td><td>Mostra cosa verrebbe eseguito, senza fare login né download.</td></tr>
       </table>
 

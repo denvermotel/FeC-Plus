@@ -56,6 +56,7 @@ from datetime import datetime
 import requests
 
 import fec_directory
+import fec_ritenuta
 from ade_auth import AuthResult, IVASERVIZI, unix_time
 
 # Eseguibile PyInstaller: cartella Download di default accanto all'exe.
@@ -168,6 +169,7 @@ class DownloadResult:
     saltati: int = 0      # scartate dalla PA o già scaricate in un elenco precedente
     errori: int = 0
     in_attesa: int = 0    # file ancora in preparazione presso l'AdE
+    senza_ritenuta: int = 0   # scaricate ma non salvate: filtro «solo con ritenuta»
 
 
 def avviso_ade(dati) -> str | None:
@@ -361,7 +363,8 @@ def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
                       id_invio_out: set | None = None,
                       per_anno: bool = False,
                       esiti_out: dict | None = None,
-                      scarica_metadati: bool = True) -> tuple[int, int]:
+                      scarica_metadati: bool = True,
+                      solo_ritenuta: bool = False) -> tuple[int, int]:
     """
     Scarica file fattura + metadati per ogni voce restituita da `url_lista`.
 
@@ -525,6 +528,18 @@ def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
                 progresso.esito(ESITO_ERRORE)
             _conta("errori")
             continue
+        if r2.status_code == 200 and solo_ritenuta:
+            ritenute = fec_ritenuta.leggi_ritenute(r2.content)
+            if ritenute == []:
+                log(f"   ⏭️  Fattura {fattura_file} senza ritenuta d'acconto: saltata.")
+                if progresso is not None:
+                    progresso.esito(ESITO_SALTATO)
+                _conta("senza_ritenuta")
+                continue
+            if ritenute is None:
+                # Meglio un file in più che una parcella persa.
+                log(f"   ⚠️  Fattura {fattura_file}: ritenuta d'acconto non verificabile "
+                    "(file non leggibile), la salvo comunque.")
         fmetadato = None
         if r2.status_code == 200:
             n_fatture += 1
@@ -600,7 +615,8 @@ def scarica_emesse(auth: AuthResult, dal: str, al: str, cf_cliente: str,
                    progresso: "Progresso | None" = None,
                    escludi_id_invio: set | None = None,
                    per_anno: bool = False,
-                   scarica_metadati: bool = True) -> DownloadResult:
+                   scarica_metadati: bool = True,
+                   solo_ritenuta: bool = False) -> DownloadResult:
     """
     Scarica le fatture EMESSE nell'intervallo [dal, al] (formato ddmmyyyy).
     `auth` deve essere già autenticato (vedi `ade_auth.autentica`).
@@ -619,7 +635,8 @@ def scarica_emesse(auth: AuthResult, dal: str, al: str, cf_cliente: str,
                                               escludi_id_invio=escludi_id_invio,
                                               per_anno=per_anno, esiti_out=esiti,
                                               id_invio_out=ids,
-                                              scarica_metadati=scarica_metadati)
+                                              scarica_metadati=scarica_metadati,
+                                              solo_ritenuta=solo_ritenuta)
     log(f"\nCliente: {cf_cliente}")
     log(f"Fatture scaricate:  {n_fatture}")
     if scarica_metadati:
@@ -627,7 +644,7 @@ def scarica_emesse(auth: AuthResult, dal: str, al: str, cf_cliente: str,
     log(f"Cartella: {cartella}")
     return DownloadResult(cf_cliente, cartella, n_fatture, n_metadati, ids,
                           esiti.get("saltati", 0), esiti.get("errori", 0),
-                          esiti.get("in_attesa", 0))
+                          esiti.get("in_attesa", 0), esiti.get("senza_ritenuta", 0))
 
 
 def scarica_ricevute(auth: AuthResult, dal: str, al: str, cf_cliente: str,
@@ -641,7 +658,8 @@ def scarica_ricevute(auth: AuthResult, dal: str, al: str, cf_cliente: str,
                    progresso: "Progresso | None" = None,
                    escludi_id_invio: set | None = None,
                    per_anno: bool = False,
-                   scarica_metadati: bool = True) -> DownloadResult:
+                   scarica_metadati: bool = True,
+                   solo_ritenuta: bool = False) -> DownloadResult:
     """
     Scarica le fatture RICEVUTE nell'intervallo [dal, al] (formato ddmmyyyy).
     `tipo_data`: 1 = ricerca per data ricezione (default), 2 = per data emissione.
@@ -664,7 +682,8 @@ def scarica_ricevute(auth: AuthResult, dal: str, al: str, cf_cliente: str,
                                               escludi_id_invio=escludi_id_invio,
                                               per_anno=per_anno, esiti_out=esiti,
                                               id_invio_out=ids,
-                                              scarica_metadati=scarica_metadati)
+                                              scarica_metadati=scarica_metadati,
+                                              solo_ritenuta=solo_ritenuta)
     log(f"\nCliente: {cf_cliente}")
     log(f"Fatture ricevute scaricate:  {n_fatture}")
     if scarica_metadati:
@@ -672,7 +691,7 @@ def scarica_ricevute(auth: AuthResult, dal: str, al: str, cf_cliente: str,
     log(f"Cartella: {cartella}")
     return DownloadResult(cf_cliente, cartella, n_fatture, n_metadati, ids,
                           esiti.get("saltati", 0), esiti.get("errori", 0),
-                          esiti.get("in_attesa", 0))
+                          esiti.get("in_attesa", 0), esiti.get("senza_ritenuta", 0))
 
 
 def scarica_transfrontaliere_emesse(auth: AuthResult, dal: str, al: str,
@@ -687,7 +706,8 @@ def scarica_transfrontaliere_emesse(auth: AuthResult, dal: str, al: str,
                    progresso: "Progresso | None" = None,
                    escludi_id_invio: set | None = None,
                    per_anno: bool = False,
-                   scarica_metadati: bool = True) -> DownloadResult:
+                   scarica_metadati: bool = True,
+                   solo_ritenuta: bool = False) -> DownloadResult:
     """Fatture transfrontaliere EMESSE nell'intervallo [dal, al] (ddmmyyyy).
     `filtro_piva`/`filtro_cf` (opzionali): come in `scarica_emesse`."""
     cartella = _cartella(dest_dir, "FattureEmesseTRAN", cf_cliente, sottocartella)
@@ -702,7 +722,8 @@ def scarica_transfrontaliere_emesse(auth: AuthResult, dal: str, al: str,
                                               escludi_id_invio=escludi_id_invio,
                                               per_anno=per_anno, esiti_out=esiti,
                                               id_invio_out=ids,
-                                              scarica_metadati=scarica_metadati)
+                                              scarica_metadati=scarica_metadati,
+                                              solo_ritenuta=solo_ritenuta)
     log(f"\nCliente: {cf_cliente}")
     log(f"Transfrontaliere emesse scaricate: {n_fatture}")
     if scarica_metadati:
@@ -710,7 +731,7 @@ def scarica_transfrontaliere_emesse(auth: AuthResult, dal: str, al: str,
     log(f"Cartella: {cartella}")
     return DownloadResult(cf_cliente, cartella, n_fatture, n_metadati, ids,
                           esiti.get("saltati", 0), esiti.get("errori", 0),
-                          esiti.get("in_attesa", 0))
+                          esiti.get("in_attesa", 0), esiti.get("senza_ritenuta", 0))
 
 
 def scarica_transfrontaliere_ricevute(auth: AuthResult, dal: str, al: str,
@@ -725,7 +746,8 @@ def scarica_transfrontaliere_ricevute(auth: AuthResult, dal: str, al: str,
                    progresso: "Progresso | None" = None,
                    escludi_id_invio: set | None = None,
                    per_anno: bool = False,
-                   scarica_metadati: bool = True) -> DownloadResult:
+                   scarica_metadati: bool = True,
+                   solo_ritenuta: bool = False) -> DownloadResult:
     """Fatture transfrontaliere RICEVUTE nell'intervallo [dal, al] (ddmmyyyy).
     `filtro_piva`/`filtro_cf` (opzionali): come in `scarica_ricevute`."""
     cartella = _cartella(dest_dir, "FattureRicevuteTRAN", cf_cliente, sottocartella)
@@ -740,7 +762,8 @@ def scarica_transfrontaliere_ricevute(auth: AuthResult, dal: str, al: str,
                                               escludi_id_invio=escludi_id_invio,
                                               per_anno=per_anno, esiti_out=esiti,
                                               id_invio_out=ids,
-                                              scarica_metadati=scarica_metadati)
+                                              scarica_metadati=scarica_metadati,
+                                              solo_ritenuta=solo_ritenuta)
     log(f"\nCliente: {cf_cliente}")
     log(f"Transfrontaliere ricevute scaricate: {n_fatture}")
     if scarica_metadati:
@@ -748,7 +771,7 @@ def scarica_transfrontaliere_ricevute(auth: AuthResult, dal: str, al: str,
     log(f"Cartella: {cartella}")
     return DownloadResult(cf_cliente, cartella, n_fatture, n_metadati, ids,
                           esiti.get("saltati", 0), esiti.get("errori", 0),
-                          esiti.get("in_attesa", 0))
+                          esiti.get("in_attesa", 0), esiti.get("senza_ritenuta", 0))
 
 
 def scarica_messe_a_disposizione(auth: AuthResult, dal: str, al: str,
@@ -762,8 +785,15 @@ def scarica_messe_a_disposizione(auth: AuthResult, dal: str, al: str,
                                  progresso: "Progresso | None" = None,
                    escludi_id_invio: set | None = None,
                    per_anno: bool = False,
-                   scarica_metadati: bool = True) -> DownloadResult:
+                   scarica_metadati: bool = True,
+                   solo_ritenuta: bool = False) -> DownloadResult:
     """Fatture ricevute "messe a disposizione" nell'intervallo [dal, al] (ddmmyyyy)."""
+    if solo_ritenuta:
+        # Scaricare il file ne registra la presa visione: scaricarlo solo per poi
+        # scartarlo fisserebbe la ricezione di un documento che non resta in cartella.
+        log("Il filtro «solo con ritenuta» non si applica alle messe a disposizione: "
+            "scaricarne il file ne registra la presa visione. Le salvo tutte.")
+        solo_ritenuta = False
     cartella = _cartella(dest_dir, "FattureRicevuteDisposizione", cf_cliente, sottocartella)
     log(f"Scarico fatture messe a disposizione per {cf_cliente}  ({dal} -> {al})")
     url = f"{IVASERVIZI}/cons/cons-services/rs/fe/mc/dal/{dal}/al/{al}?v={unix_time()}"
@@ -775,7 +805,8 @@ def scarica_messe_a_disposizione(auth: AuthResult, dal: str, al: str,
                                               escludi_id_invio=escludi_id_invio,
                                               per_anno=per_anno, esiti_out=esiti,
                                               id_invio_out=ids,
-                                              scarica_metadati=scarica_metadati)
+                                              scarica_metadati=scarica_metadati,
+                                              solo_ritenuta=solo_ritenuta)
     log(f"\nCliente: {cf_cliente}")
     log(f"Fatture messe a disposizione scaricate: {n_fatture}")
     if scarica_metadati:
@@ -783,7 +814,7 @@ def scarica_messe_a_disposizione(auth: AuthResult, dal: str, al: str,
     log(f"Cartella: {cartella}")
     return DownloadResult(cf_cliente, cartella, n_fatture, n_metadati, ids,
                           esiti.get("saltati", 0), esiti.get("errori", 0),
-                          esiti.get("in_attesa", 0))
+                          esiti.get("in_attesa", 0), esiti.get("senza_ritenuta", 0))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

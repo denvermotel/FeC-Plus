@@ -374,7 +374,10 @@ class FecGui:
         self.std_escludi_scartate = tk.BooleanVar(value=True)
         self.std_estrai_p7m = tk.BooleanVar(value=False)
         self.std_scarica_metadati = tk.BooleanVar(value=True)
+        self.std_solo_ritenuta = tk.BooleanVar(value=False)
         self.std_csv_ade = tk.BooleanVar(value=False)
+        # Scheda Utility: casella della ritenuta, anche questa letta da _load_config.
+        self.util_ritenuta = tk.BooleanVar(value=False)
         # Tipo documento "Fatture Emesse"/"Fatture Ricevute": aggiunge in coda,
         # sullo stesso periodo, rispettivamente le transfrontaliere emesse e le
         # messe a disposizione (checkbox visibili solo col tipo pertinente).
@@ -471,6 +474,8 @@ class FecGui:
         self.std_escludi_scartate.set(bool(cfg.get("std_escludi_scartate_pa", True)))
         self.std_estrai_p7m.set(bool(cfg.get("std_estrai_p7m", False)))
         self.std_scarica_metadati.set(bool(cfg.get("std_scarica_metadati", True)))
+        self.std_solo_ritenuta.set(bool(cfg.get("std_solo_ritenuta", False)))
+        self.util_ritenuta.set(bool(cfg.get("util_ritenuta", False)))
         self.std_csv_ade.set(bool(cfg.get("std_csv_ade", False)))
         self.sso_var.set(bool(cfg.get("login_sso", False)))
         self.std_includi_trans.set(bool(cfg.get("std_includi_trans", False)))
@@ -532,6 +537,8 @@ class FecGui:
             "std_escludi_scartate_pa": bool(self.std_escludi_scartate.get()),
             "std_estrai_p7m": bool(self.std_estrai_p7m.get()),
             "std_scarica_metadati": bool(self.std_scarica_metadati.get()),
+            "std_solo_ritenuta": bool(self.std_solo_ritenuta.get()),
+            "util_ritenuta": bool(self.util_ritenuta.get()),
             "std_csv_ade": bool(self.std_csv_ade.get()),
             "login_sso": bool(self.sso_var.get()),
             "std_includi_trans": bool(self.std_includi_trans.get()),
@@ -1911,7 +1918,8 @@ class FecGui:
             if errori:
                 pezzi.append(f"{errori} documenti non scaricati")
             if saltati:
-                pezzi.append(f"{saltati} saltati (rifiutati dalla P.A.)")
+                pezzi.append(f"{saltati} saltati (rifiutati dalla P.A., non ancora "
+                             "disponibili o esclusi dai filtri)")
             ttk.Label(frm, text="⚠️  " + ", ".join(pezzi) + ".",
                       foreground="#b25000").pack(anchor="w", pady=(6, 0))
 
@@ -4024,6 +4032,11 @@ class FecGui:
             row=r, column=0, columnspan=2, sticky="w")
 
         r += 1
+        ttk.Checkbutton(f, text="Scarica solo fatture e parcelle con ritenuta d'acconto",
+                        variable=self.std_solo_ritenuta).grid(
+            row=r, column=0, columnspan=2, sticky="w")
+
+        r += 1
         ttk.Checkbutton(f, text="Genera anche il CSV dell'elenco (formato Agenzia Entrate)",
                         variable=self.std_csv_ade).grid(
             row=r, column=0, columnspan=2, sticky="w")
@@ -4058,7 +4071,11 @@ class FecGui:
                                  "pulsante accanto aggiunge tutte le deleghe trovate. Il "
                                  "download parte per ciascuno in coda, con un solo accesso e "
                                  "ognuno nella propria cartella. La P.IVA compare solo con un "
-                                 "soggetto; con più soggetti si usa quella della delega. ")
+                                 "soggetto; con più soggetti si usa quella della delega. "
+                                 "«Solo fatture e parcelle con ritenuta d'acconto» salva "
+                                 "solo i documenti con la ritenuta: il portale la riporta "
+                                 "solo nel file, quindi ogni file si scarica comunque per "
+                                 "controllarlo. ")
 
         r += 1; r = self._no_update_check(f, r)
         self._run_btn(f, r, "Avvia Download", self._run_standard)
@@ -4205,6 +4222,9 @@ class FecGui:
         escludi_scartate = bool(self.std_escludi_scartate.get())
         estrai_p7m = bool(self.std_estrai_p7m.get())
         scarica_metadati = bool(self.std_scarica_metadati.get())
+        solo_ritenuta = bool(self.std_solo_ritenuta.get())
+        if solo_ritenuta:
+            self._avviso_p7m_per_ritenuta("verranno salvate tutte")
         csv_ade = bool(self.std_csv_ade.get())
         includi_trans = bool(self.std_includi_trans.get())
         includi_disposizione = bool(self.std_includi_disposizione.get())
@@ -4226,7 +4246,7 @@ class FecGui:
                         dest_dir=dest.cartella, sottocartella=False, per_anno=dest.per_anno,
                         control=ctrl, log=log, progresso=prog,
                         escludi_scartate_pa=escludi_scartate, estrai_p7m=estrai_p7m,
-                        scarica_metadati=scarica_metadati,
+                        scarica_metadati=scarica_metadati, solo_ritenuta=solo_ritenuta,
                         csv_ade=csv_ade, **extra)
                     esiti.append(esito)
                     return esito
@@ -4971,6 +4991,12 @@ class FecGui:
                         variable=self.util_formato, value="csv").pack(side=tk.LEFT, padx=14)
 
         r += 1
+        self._util_ritenuta_cb = ttk.Checkbutton(
+            f, text="Includi ritenuta d'acconto (scarica il file di ogni fattura, più lento)",
+            variable=self.util_ritenuta)
+        self._util_ritenuta_cb.grid(row=r, column=1, sticky="w")
+
+        r += 1
         self._util_da_lbl = ttk.Label(f, text="Distributori automatici:")
         self._util_da_lbl.grid(row=r, column=0, sticky="w", pady=4, padx=(0, 8))
         self._util_da_frame = ttk.Frame(f)
@@ -5029,6 +5055,17 @@ class FecGui:
         self.util_tipo.trace_add("write", _toggle_piva_label)
         _toggle_piva_label()
 
+        def _toggle_ritenuta(*_):
+            # Il CSV riproduce il formato del portale e i Corrispettivi non hanno
+            # ritenute: la casella spenta evita di aspettarsi colonne che non ci sono.
+            senza = (self.util_formato.get() == "csv"
+                     or self.util_tipo.get() == "Corrispettivi")
+            self._util_ritenuta_cb.state(["disabled"] if senza else ["!disabled"])
+
+        self.util_formato.trace_add("write", _toggle_ritenuta)
+        self.util_tipo.trace_add("write", _toggle_ritenuta)
+        _toggle_ritenuta()
+
         r += 1; self._note(f, r, "Genera un file Excel (.xlsx) di riepilogo con colonne per "
                                  "aliquota IVA/natura (richiede il pacchetto opzionale "
                                  "«openpyxl»). Fatture: una riga per fattura, con una chiamata di "
@@ -5050,7 +5087,11 @@ class FecGui:
                                  "pulsante «Esporta la tabella» del portale, per la riconciliazione "
                                  "con i gestionali: non richiede «openpyxl», non legge il dettaglio "
                                  "delle fatture ed è quindi immediato, ma non ha le colonne per "
-                                 "aliquota. Non è disponibile per i Corrispettivi.")
+                                 "aliquota. Non è disponibile per i Corrispettivi. "
+                                 "«Includi ritenuta d'acconto» (solo Excel) aggiunge tipo, "
+                                 "percentuale e importo della ritenuta ed evidenzia le "
+                                 "fatture che ne hanno una: scarica il file di ogni "
+                                 "fattura, quindi è più lento.")
         r += 1; r = self._no_update_check(f, r)
         self._util_run_btn = self._run_btn(f, r, "Scarica Elenco Excel",
                                            self._run_utility, width=26)
@@ -5130,6 +5171,9 @@ class FecGui:
         gran = self._util_gran()
         modalita_da = self.util_da_modalita.get()
         modalita_accesso = self.modalita.get()
+        ritenuta = bool(self.util_ritenuta.get()) and not formato_csv and not corrispettivi
+        if ritenuta:
+            self._avviso_p7m_per_ritenuta("risulteranno «non leggibili»")
 
         def op(res, s, log, fq, ctrl, prog):
             import fec_directory
@@ -5166,11 +5210,15 @@ class FecGui:
                             avvisi.extend(esito_corr.avvisi)
                         else:
                             tipo = self._UTILITY_TIPI.get(tipo_ui, "emesse")
-                            genera = (fec_utility.elenco_fatture_csv_ade if formato_csv
-                                      else fec_utility.elenco_fatture_excel)
+                            if formato_csv:
+                                genera, extra = fec_utility.elenco_fatture_csv_ade, {}
+                            else:
+                                genera = fec_utility.elenco_fatture_excel
+                                extra = {"ritenuta": ritenuta}
                             percorsi.append(genera(
                                 res, cfcl, piva, tipo, sd, sa,
-                                dest_dir=destdir, sottocartella=sotto, control=ctrl, log=log))
+                                dest_dir=destdir, sottocartella=sotto, control=ctrl, log=log,
+                                **extra))
                     except fec_utility.NessunDato as exc:
                         log(f"   (periodo saltato: {exc})")
                 chiuso = "completata"
@@ -5189,6 +5237,17 @@ class FecGui:
         self._esegui_per_soggetti(soggetti, _profilo_da_modalita(self.modalita.get()),
             f"Elenco {'CSV' if formato_csv else 'Excel'} {tipo_ui}", op, len(soggetti),
             conta_soggetti=True)
+
+    def _avviso_p7m_per_ritenuta(self, effetto: str) -> None:
+        """Avvisa prima di partire se manca «asn1crypto»: senza, la ritenuta delle
+        fatture firmate (.p7m) non si può leggere."""
+        mancanti = fec_deps.find_missing().get("p7m", [])
+        if mancanti:
+            messagebox.showwarning(
+                "Ritenuta d'acconto",
+                "Senza il pacchetto «asn1crypto» le fatture firmate (.p7m) non si possono "
+                f"controllare: {effetto}.\n\nInstalla con:  "
+                f"{fec_deps.pip_install_hint(mancanti)}")
 
     def _util_gran(self) -> str:
         """Granularità file Excel: vale solo se il periodo scelto è «Anno intero»

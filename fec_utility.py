@@ -48,8 +48,10 @@ import requests
 
 from ade_auth import AuthResult, IVASERVIZI, unix_time
 from fec_download import (_cartella, Controllo, DownloadError,  # noqa: F401
-                          HTTP_TIMEOUT, avviso_ade, controlla_avviso_elenco)
+                          HTTP_TIMEOUT, avviso_ade, controlla_avviso_elenco,
+                          _file_url, _get_con_retry, _in_predisposizione)
 from fec_queue import spezza_periodo
+import fec_ritenuta
 
 
 class NessunDato(DownloadError):
@@ -427,7 +429,7 @@ def _ordina_chiavi_pivot(chiavi) -> list[str]:
 def _scrivi_xlsx(percorso: str, colonne_fisse: list[str], chiavi_pivot: list[str],
                  colonne_num: list[str], colonne_testo: list[str],
                  righe: list[dict], titolo: str = "Elenco",
-                 escludi_da_totali=()) -> None:
+                 escludi_da_totali=(), evidenzia=None) -> None:
     """
     Scrive un elenco pivot in `percorso`: colonne fisse (testo), coppie
     `Imp. X | IVA X` per ogni chiave pivot, colonne numeriche di coda (sommate
@@ -435,7 +437,8 @@ def _scrivi_xlsx(percorso: str, colonne_fisse: list[str], chiavi_pivot: list[str
     Ogni riga è un dict con le chiavi delle colonne + `iva` = {chiave: (imp, iva)}.
     Intestazioni in grassetto, formato numerico contabile, prima riga bloccata.
     `escludi_da_totali`: colonne numeriche che la riga TOTALI lascia vuote (per
-    esempio i contatori progressivi, che sommati non hanno senso).
+    esempio i contatori progressivi, che sommati non hanno senso). `evidenzia`, se
+    data, restituisce per ogni riga il colore di sfondo (RGB esadecimale) o None.
     """
     try:
         from openpyxl import Workbook
@@ -473,6 +476,11 @@ def _scrivi_xlsx(percorso: str, colonne_fisse: list[str], chiavi_pivot: list[str
         valori += [riga.get(c) for c in colonne_num]
         valori += [riga.get(c, "") for c in colonne_testo]
         ws.append(valori)
+        colore = evidenzia(riga) if evidenzia is not None else None
+        if colore:
+            sfondo = PatternFill(start_color=colore, end_color=colore, fill_type="solid")
+            for cella in ws[ws.max_row]:
+                cella.fill = sfondo
         for i, v in enumerate(valori[prima_num - 1:ultima_num]):
             if i not in escluse and isinstance(v, (int, float)):
                 totali[i] += v
@@ -499,14 +507,70 @@ def _scrivi_xlsx(percorso: str, colonne_fisse: list[str], chiavi_pivot: list[str
 # Funzione pubblica
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Esiti della lettura che non sono ritenute: compaiono in «Ritenuta tipo».
+_NON_LEGGIBILE = "non leggibile"
+_NON_SCARICATO = "file non scaricato"
+_IN_ATTESA = "file non ancora disponibile"
+_PROBLEMI = (_NON_LEGGIBILE, _NON_SCARICATO, _IN_ATTESA)
+_COLORE_RITENUTA = "FFF2CC"
+_COLORE_PROBLEMA = "FCE4D6"
+
+
+def _ritenute_fattura(auth: AuthResult, voce: dict, fattura_file: str, numero: str, log):
+    """Ritenute lette dal file della fattura (il portale non le espone né in elenco né
+    nel dettaglio), oppure il motivo per cui non si possono leggere. `numero` sceglie
+    la fattura giusta se il file è un lotto."""
+    if _in_predisposizione(voce):
+        return _IN_ATTESA
+    try:
+        r = _get_con_retry(auth, _file_url(fattura_file, "FILE_FATTURA"), log)
+    except DownloadError as exc:
+        log(f"   ⚠️  Fattura {fattura_file}: file non scaricato per la ritenuta ({exc}).")
+        return _NON_SCARICATO
+    if r.status_code != 200:
+        log(f"   ⚠️  Fattura {fattura_file}: file non disponibile per la ritenuta "
+            f"(HTTP {r.status_code}).")
+        return _NON_SCARICATO
+    ritenute = fec_ritenuta.leggi_ritenute(r.content, numero=numero)
+    if ritenute is None:
+        log(f"   ⚠️  Fattura {fattura_file}: file non leggibile, ritenuta non verificata.")
+        return _NON_LEGGIBILE
+    return ritenute
+
+
+def _aggiungi_ritenuta(riga: dict, ritenute) -> None:
+    if isinstance(ritenute, str):
+        riga.update({"Ritenuta tipo": ritenute, "Ritenuta %": "",
+                     "Ritenuta importo": None})
+        return
+    tipi, aliquote, importo = fec_ritenuta.riepilogo(ritenute)
+    if importo is not None and _e_nota_credito(riga.get("Tipo Documento", "")):
+        importo = -importo
+    riga.update({"Ritenuta tipo": tipi, "Ritenuta %": aliquote,
+                 "Ritenuta importo": importo})
+
+
+def _con_ritenuta(riga: dict) -> bool:
+    return riga.get("Ritenuta tipo", "") not in ("",) + _PROBLEMI
+
+
+def _colore_ritenuta(riga: dict) -> str | None:
+    if _con_ritenuta(riga):
+        return _COLORE_RITENUTA
+    return _COLORE_PROBLEMA if riga.get("Ritenuta tipo") in _PROBLEMI else None
+
+
 def elenco_fatture_excel(auth: AuthResult, cf_cliente: str, piva: str, tipo: str,
                          dal: str, al: str, *, dest_dir: str | None = None,
                          sottocartella: bool = True,
-                         control: "Controllo | None" = None, log=print) -> str:
+                         control: "Controllo | None" = None, log=print,
+                         ritenuta: bool = False) -> str:
     """
     Genera l'Excel «Elenco fatture» per il periodo [dal, al] (GGMMAAAA) e ritorna
     il percorso del file .xlsx creato. Periodi > 3 mesi spezzati internamente
     (guardia 12 mesi di spezza_periodo); un solo file in output.
+    Con `ritenuta` scarica anche il file di ogni fattura e aggiunge le colonne della
+    ritenuta d'acconto, evidenziando le righe che ne hanno una.
     """
     _, etichetta = TIPI_ELENCO.get(tipo, (None, tipo))
     blocchi = spezza_periodo(dal, al, "%d%m%Y")
@@ -531,7 +595,11 @@ def elenco_fatture_excel(auth: AuthResult, cf_cliente: str, piva: str, tipo: str
             control.check()
         fattura_file = f"{voce.get('tipoInvio', '')}{voce.get('idFattura', '')}"
         dettaglio = _dettaglio_fattura(auth, fattura_file, log=log)
-        righe.append(_estrai_riga(voce, dettaglio))
+        riga = _estrai_riga(voce, dettaglio)
+        if ritenuta:
+            _aggiungi_ritenuta(riga, _ritenute_fattura(
+                auth, voce, fattura_file, str(riga.get("N. Fattura", "")), log))
+        righe.append(riga)
         if i % 10 == 0 or i == len(voci):
             log(f"  Dettaglio fatture: {i}/{len(voci)}")
 
@@ -540,9 +608,17 @@ def elenco_fatture_excel(auth: AuthResult, cf_cliente: str, piva: str, tipo: str
     cartella = _cartella(dest_dir, "ElencoFatture", cf_cliente, sottocartella)
     prefisso = (piva or cf_cliente).strip()
     percorso = os.path.join(cartella, f"{prefisso}_{dal}-{al}_{etichetta}.xlsx")
-    _scrivi_xlsx(percorso, COLONNE_FISSE, chiavi_pivot,
-                 ["Tot. Imponibile", "Tot. IVA", "Totale Fattura"],
-                 ["Bollo Virtuale"], righe, titolo="Elenco fatture")
+    colonne_num = ["Tot. Imponibile", "Tot. IVA", "Totale Fattura"]
+    colonne_testo = ["Bollo Virtuale"]
+    if ritenuta:
+        colonne_num.append("Ritenuta importo")
+        colonne_testo += ["Ritenuta tipo", "Ritenuta %"]
+    _scrivi_xlsx(percorso, COLONNE_FISSE, chiavi_pivot, colonne_num, colonne_testo,
+                 righe, titolo="Elenco fatture",
+                 evidenzia=_colore_ritenuta if ritenuta else None)
+    if ritenuta:
+        n = sum(1 for r in righe if _con_ritenuta(r))
+        log(f"Fatture con ritenuta d'acconto: {n}.")
     log(f"\nElenco fatture generato ({len(righe)} righe, "
         f"{len(chiavi_pivot)} aliquote/nature).")
     log(f"File: {percorso}")

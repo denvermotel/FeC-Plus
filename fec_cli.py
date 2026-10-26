@@ -100,6 +100,10 @@ def build_parser() -> argparse.ArgumentParser:
                      default=True,
                      help="Non scarica il file dei metadati di ogni fattura "
                           "(default: scaricati; solo per i comandi di download)")
+    acc.add_argument("--solo-ritenuta", action="store_true", default=False,
+                     help="Salva solo le fatture con ritenuta d'acconto (il file di "
+                          "ogni fattura si scarica comunque per verificarlo; solo per "
+                          "i comandi di download)")
     acc.add_argument("--csv-ade", action="store_true", default=False,
                      help="Genera anche il CSV dell'elenco nel formato «Esporta la "
                           "tabella» del portale AdE (solo per i comandi di download)")
@@ -241,6 +245,7 @@ def _dispatch(args, auth, fq):
         kw["escludi_scartate_pa"] = args.escludi_scartate_pa
         kw["estrai_p7m"] = args.estrai_p7m
         kw["scarica_metadati"] = args.scarica_metadati
+        kw["solo_ritenuta"] = args.solo_ritenuta
         kw["csv_ade"] = args.csv_ade
         kw["per_anno"] = dest.per_anno
     if spec.kind == "invio":
@@ -297,7 +302,8 @@ def main(argv=None) -> int:
               f"cfstudio={args.cfstudio!r}")
         for k in ("dal", "al", "tipo", "tipo_data", "trimestre", "anno", "dest",
                   "cartelle", "no_anno",
-                  "escludi_scartate_pa", "estrai_p7m", "scarica_metadati", "csv_ade"):
+                  "escludi_scartate_pa", "estrai_p7m", "scarica_metadati", "solo_ritenuta",
+                  "csv_ade"):
             if hasattr(args, k):
                 print(f"  {k} = {getattr(args, k)!r}")
         print("  (login e download NON eseguiti)")
@@ -325,6 +331,11 @@ def main(argv=None) -> int:
         print("   Installa con:  " + fec_deps.pip_install_hint(missing["p7m"]),
               file=sys.stderr)
         return 3
+    if getattr(args, "solo_ritenuta", False) and missing["p7m"]:
+        print("⚠️  Senza «asn1crypto» le fatture firmate (.p7m) non si possono controllare: "
+              "con «--solo-ritenuta» verranno salvate tutte.", file=sys.stderr)
+        print("   Installa con:  " + fec_deps.pip_install_hint(missing["p7m"]),
+              file=sys.stderr)
 
     from ade_auth import autentica, Creds, AuthError
     import fec_queue as fq

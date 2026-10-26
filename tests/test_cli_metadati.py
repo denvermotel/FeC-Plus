@@ -28,6 +28,31 @@ class TestCliMetadati(unittest.TestCase):
         args = fec_cli.build_parser().parse_args(ACCESSO + ["--senza-metadati"] + PERIODO)
         self.assertFalse(args.scarica_metadati)
 
+    def test_flag_solo_ritenuta(self):
+        args = fec_cli.build_parser().parse_args(ACCESSO + PERIODO)
+        self.assertFalse(args.solo_ritenuta)
+        args = fec_cli.build_parser().parse_args(ACCESSO + ["--solo-ritenuta"] + PERIODO)
+        self.assertTrue(args.solo_ritenuta)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            fec_cli.main(ACCESSO + ["--solo-ritenuta", "--dry-run"] + PERIODO)
+        self.assertIn("solo_ritenuta = True", buf.getvalue())
+
+    def test_solo_ritenuta_senza_asn1crypto_avvisa(self):
+        import fec_deps
+        from contextlib import redirect_stderr
+        from unittest.mock import patch
+        import ade_auth
+        err = io.StringIO()
+        with patch.object(fec_deps, "find_missing",
+                          return_value={"core": [], "browser": [], "gui": [],
+                                        "p7m": ["asn1crypto"], "excel": []}), \
+                patch.object(ade_auth, "autentica",
+                             side_effect=ade_auth.AuthError("login", "prova")), \
+                redirect_stderr(err), redirect_stdout(io.StringIO()):
+            fec_cli.main(ACCESSO + ["--solo-ritenuta"] + PERIODO)
+        self.assertIn("asn1crypto", err.getvalue())
+
     def test_dry_run_mostra_l_opzione(self):
         buf = io.StringIO()
         with redirect_stdout(buf):

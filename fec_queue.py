@@ -275,6 +275,7 @@ class Richiesta:
     estrai_p7m: bool = False
     csv_ade: bool = False
     scarica_metadati: bool = True
+    solo_ritenuta: bool = False
 
 
 def _kwargs_richiesta(r: Richiesta) -> dict:
@@ -289,6 +290,7 @@ def _kwargs_richiesta(r: Richiesta) -> dict:
         kw["estrai_p7m"] = r.estrai_p7m
         kw["csv_ade"] = r.csv_ade
         kw["scarica_metadati"] = r.scarica_metadati
+        kw["solo_ritenuta"] = r.solo_ritenuta
     if spec is not None and spec.kind == "invio":
         kw["piva"] = r.piva
     if r.tipo == "bolli":

@@ -264,6 +264,9 @@ def info_sessione(periodo: str, tipi, modalita_accesso: str, versione: str, lanc
         info["Saltate"] = sum(e.saltati for e in scarichi)
         info["Errori"] = sum(e.errori for e in scarichi)
         info["Non ancora disponibili"] = sum(e.in_attesa for e in scarichi)
+        senza = sum(getattr(e, "senza_ritenuta", 0) for e in scarichi)
+        if senza:
+            info["Senza ritenuta d'acconto (non salvate)"] = senza
     info["Versione"] = versione
     return info
 
