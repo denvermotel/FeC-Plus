@@ -293,6 +293,20 @@ def _get_con_retry(auth: AuthResult, url: str, log, tentativi: int = 3):
     )
 
 
+# Il portale a volte risponde 304 (senza richieste condizionali da parte nostra) o
+# 503 sul file di una fattura, e poco dopo lo consegna: queste fatture si riprovano
+# a fine elenco, dopo le pause indicate (secondi), una per giro.
+_STATI_DA_RITENTARE = (304, 503)
+_PAUSE_RITENTATIVI = (10, 30)
+
+
+def _attendi(secondi: int, control) -> None:
+    for _ in range(secondi):
+        if control is not None:
+            control.check()
+        time.sleep(1)
+
+
 def _campo_ci(d: dict, nome: str):
     """Valore di `nome` in `d` con match case-insensitive sulla chiave (nomi campo
     JSON AdE non garantiti in un unico casing)."""
@@ -499,27 +513,14 @@ def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
         if esiti_out is not None:
             esiti_out[chiave] = esiti_out.get(chiave, 0) + 1
 
-    for fattura in fatture:
-        if control is not None:
-            control.check()   # pausa/annullamento cooperativo tra un file e l'altro
+    da_ritentare: list[dict] = []
+
+    def _scarica_file(fattura: dict, rinvia: bool) -> bool:
+        """Scarica file e metadati di una fattura. True se il portale l'ha rifiutata
+        per un momento e `rinvia` chiede di riprovarla più tardi: in quel caso
+        nessun esito sul nastro, che arriverà dal nuovo tentativo."""
+        nonlocal n_fatture, n_metadati
         fattura_file = fattura["tipoInvio"] + fattura["idFattura"]
-
-        if _in_predisposizione(fattura):
-            n_in_attesa += 1
-            log(f"   ⏳ Fattura {fattura_file}: file in preparazione presso l'AdE "
-                "(disponibile entro 72 ore dalla consegna), saltata.")
-            if progresso is not None:
-                progresso.esito(ESITO_SALTATO)
-            _conta("in_attesa")
-            continue
-
-        if escludi_scartate_pa and _e_scartata_pa(auth, fattura_file, log):
-            log(f"   ⏭️  Fattura {fattura_file} rifiutata dalla P.A.: saltata.")
-            if progresso is not None:
-                progresso.esito(ESITO_SALTATO)
-            _conta("saltati")
-            continue
-
         try:
             r2 = _get_con_retry(auth, _file_url(fattura_file, "FILE_FATTURA"), log)
         except DownloadError as exc:
@@ -527,7 +528,7 @@ def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
             if progresso is not None:
                 progresso.esito(ESITO_ERRORE)
             _conta("errori")
-            continue
+            return False
         if r2.status_code == 200 and solo_ritenuta:
             ritenute = fec_ritenuta.leggi_ritenute(r2.content)
             if ritenute == []:
@@ -535,7 +536,7 @@ def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
                 if progresso is not None:
                     progresso.esito(ESITO_SALTATO)
                 _conta("senza_ritenuta")
-                continue
+                return False
             if ritenute is None:
                 # Meglio un file in più che una parcella persa.
                 log(f"   ⚠️  Fattura {fattura_file}: ritenuta d'acconto non verificabile "
@@ -572,14 +573,18 @@ def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
             # `_get_con_retry` solleva solo sugli errori di connessione: un
             # 4xx/5xx arriva fin qui come Response. Senza questo ramo la
             # fattura non avrebbe alcuna tacca e il nastro non si chiuderebbe mai.
+            if rinvia and r2.status_code in _STATI_DA_RITENTARE:
+                log(f"   ↻ Fattura {fattura_file}: il portale risponde HTTP "
+                    f"{r2.status_code}, la riprovo alla fine dell'elenco.")
+                return True
             log(f"   ❌ Fattura {fattura_file} non scaricata (HTTP {r2.status_code}).")
             if progresso is not None:
                 progresso.esito(ESITO_ERRORE)
             _conta("errori")
-            continue
+            return False
 
         if not scarica_metadati:
-            continue
+            return False
 
         try:
             r3 = _get_con_retry(auth, _file_url(fattura_file, "FILE_METADATI"), log)
@@ -587,12 +592,52 @@ def _scarica_da_lista(auth: AuthResult, url_lista: str, dest_dir: str,
             # Nessun esito sul nastro: la fattura e' gia' stata contata sopra,
             # una tacca vale un documento, non un file.
             log(f"   ❌ Metadato {fattura_file} saltato: {exc}")
-            continue
+            return False
         if r3.status_code == 200 and fmetadato:
             n_metadati += 1
             log(f"Scarico metadati -> {fmetadato}_metadato.xml")
             with open(os.path.join(cartella_file, f"{fmetadato}_metadato.xml"), "wb") as f:
                 f.write(r3.content)
+        return False
+
+    for fattura in fatture:
+        if control is not None:
+            control.check()   # pausa/annullamento cooperativo tra un file e l'altro
+        fattura_file = fattura["tipoInvio"] + fattura["idFattura"]
+
+        if _in_predisposizione(fattura):
+            n_in_attesa += 1
+            log(f"   ⏳ Fattura {fattura_file}: file in preparazione presso l'AdE "
+                "(disponibile entro 72 ore dalla consegna), saltata.")
+            if progresso is not None:
+                progresso.esito(ESITO_SALTATO)
+            _conta("in_attesa")
+            continue
+
+        if escludi_scartate_pa and _e_scartata_pa(auth, fattura_file, log):
+            log(f"   ⏭️  Fattura {fattura_file} rifiutata dalla P.A.: saltata.")
+            if progresso is not None:
+                progresso.esito(ESITO_SALTATO)
+            _conta("saltati")
+            continue
+
+        if not _scarica_file(fattura, rinvia=True):
+            continue
+        da_ritentare.append(fattura)
+
+    for giro, pausa in enumerate(_PAUSE_RITENTATIVI, 1):
+        if not da_ritentare:
+            break
+        log(f"\n↻ Riprovo {len(da_ritentare)} fatture rifiutate per un momento dal portale "
+            f"fra {pausa} secondi...")
+        _attendi(pausa, control)
+        ultimo = giro == len(_PAUSE_RITENTATIVI)
+        rimaste, da_ritentare = da_ritentare, []
+        for fattura in rimaste:
+            if control is not None:
+                control.check()
+            if _scarica_file(fattura, rinvia=not ultimo):
+                da_ritentare.append(fattura)
 
     if n_in_attesa:
         log(f"\n⏳ {n_in_attesa} fatture non ancora disponibili sul portale: "
